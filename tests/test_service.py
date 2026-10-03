@@ -4,11 +4,14 @@ from backloggery_watchdog.state import StateStore
 
 
 class FakeRA:
+    def __init__(self, console="PlayStation 2"):
+        self.console = console
+
     def recently_played(self):
         return {
             "GameID": 32650,
             "Title": "Kingdom Hearts",
-            "ConsoleName": "PlayStation 2",
+            "ConsoleName": self.console,
             "LastPlayed": "2026-09-28",
             "NumAchieved": 18,
             "NumPossibleAchievements": 67,
@@ -25,13 +28,30 @@ class FakeRA:
 
 
 class FakeBackloggery:
-    def __init__(self, race_candidate=False):
+    def __init__(self, race_candidate=False, platform_present=True):
         self.library_calls = 0
         self.add_calls = 0
+        self.platform_add_calls = 0
         self.race_candidate = race_candidate
+        self.platform_present = platform_present
+        self.current_platform = {
+            "platform_id": 132,
+            "title": "PlayStation 2",
+            "abbr": "PS2",
+            "format": 3,
+        }
+        self.last_game_payload = None
 
     def platforms(self):
-        return [{"platform_id": 132, "title": "PlayStation 2", "abbr": "PS2"}]
+        return [self.current_platform] if self.platform_present else []
+
+    def platform_catalog(self):
+        return [{"platform_id": 40, "title": "Dreamcast", "abbr": "DC", "format": 3}]
+
+    def add_platform(self, platform):
+        self.platform_add_calls += 1
+        self.current_platform = dict(platform)
+        self.platform_present = True
 
     def library(self, username):
         self.library_calls += 1
@@ -41,23 +61,11 @@ class FakeBackloggery:
 
     def add_game(self, payload):
         self.add_calls += 1
+        self.last_game_payload = dict(payload)
         return 123
 
     def game(self, entry_id):
-        return {
-            "game_inst_id": entry_id,
-            "title": "Kingdom Hearts",
-            "platform_id": 132,
-            "platform_title": "PlayStation 2",
-            "abbr": "PS2",
-            "status": 20,
-            "phys_digi": 20,
-            "own": 1,
-            "region": 2,
-            "achieve_score": 18,
-            "achieve_total": 67,
-            "notes": "World: Test",
-        }
+        return {"game_inst_id": entry_id, **self.last_game_payload}
 
 
 def config(path, dry_run=False):
@@ -102,3 +110,30 @@ def test_dry_run_never_calls_add(tmp_path):
     assert result.plan.action == "create"
     assert destination.add_calls == 0
     assert store.get_mapping(32650) is None
+
+
+def test_live_cycle_registers_missing_platform_then_adds_game(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    destination = FakeBackloggery(platform_present=False)
+    result = WatchdogService(
+        config(tmp_path / "state.db"), store, FakeRA(console="Dreamcast"), destination
+    ).cycle()
+    assert result.plan.action == "create"
+    assert destination.platform_add_calls == 1
+    assert destination.current_platform["title"] == "Dreamcast"
+    assert destination.add_calls == 1
+    assert store.get_mapping(32650) == 123
+
+
+def test_dry_run_reports_missing_platform_without_registering_it(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    destination = FakeBackloggery(platform_present=False)
+    result = WatchdogService(
+        config(tmp_path / "state.db", dry_run=True),
+        store,
+        FakeRA(console="Dreamcast"),
+        destination,
+    ).cycle()
+    assert result.plan.action == "platform_required"
+    assert destination.platform_add_calls == 0
+    assert destination.add_calls == 0

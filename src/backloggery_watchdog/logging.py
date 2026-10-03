@@ -65,7 +65,22 @@ class PlainFormatter(logging.Formatter):
             title = plan.get("title") or "No recent game"
             game_id = plan.get("ra_game_id") or "-"
             summary = data.get("summary") or plan.get("reason", "")
+            if action == "NOOP":
+                return prefix + f"Up to date | {title} | no changes needed"
+            if action == "PLATFORM_REQUIRED":
+                return prefix + f"Platform needed | {title} | {summary}"
             return prefix + f"Plan {action} | {title} | RA {game_id} | {summary}"
+        if event == "rich_presence":
+            value = data.get("value")
+            if value is None:
+                return prefix + f"Rich Presence unavailable | {data.get('title')} | existing Notes preserved"
+            readable = str(value).replace("\r", " ").replace("\n", " ")
+            return prefix + f"Rich Presence | {data.get('title')} | {readable}"
+        if event == "platform_registered":
+            return prefix + (
+                f"Platform registered | {data.get('platform')} | "
+                f"Backloggery platform {data.get('platform_id')}"
+            )
         if event == "sync_write":
             action = str(data.get("action", "write")).upper()
             return prefix + (

@@ -31,3 +31,31 @@ def test_plain_formatter_makes_plan_readable():
     rendered = PlainFormatter().format(record)
     assert "Plan CREATE | Kingdom Hearts | RA 32650" in rendered
     assert "18/67 achievements" in rendered
+
+
+def test_plain_formatter_uses_plain_language_for_noop():
+    record = logging.LogRecord(
+        "watchdog",
+        logging.INFO,
+        "",
+        0,
+        {"event": "sync_plan", "plan": {"action": "noop", "title": "Kingdom Hearts"}},
+        (),
+        None,
+    )
+    assert "Up to date | Kingdom Hearts | no changes needed" in PlainFormatter().format(record)
+
+
+def test_plain_formatter_displays_rich_presence_on_one_line():
+    record = logging.LogRecord(
+        "watchdog",
+        logging.INFO,
+        "",
+        0,
+        {"event": "rich_presence", "title": "Game", "value": "World: Test\nExpert"},
+        (),
+        None,
+    )
+    rendered = PlainFormatter().format(record)
+    assert "Rich Presence | Game | World: Test Expert" in rendered
+    assert rendered.count("\n") == 0

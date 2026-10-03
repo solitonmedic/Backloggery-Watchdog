@@ -8,7 +8,7 @@ from .backloggery import BackloggeryClient
 from .config import Config
 from .errors import AuthenticationError, UpstreamError
 from .models import GameState, SyncPlan
-from .planner import REGION_CODES, STATUS_NAMES, build_plan
+from .planner import PLATFORM_MAP, REGION_CODES, STATUS_NAMES, build_plan
 from .ra import RetroAchievementsClient, normalize_game_state
 from .state import StateStore
 
@@ -137,6 +137,60 @@ class WatchdogService:
             return refreshed
         return plan
 
+    def _ensure_platform(
+        self,
+        state: GameState,
+        platforms: list[dict],
+    ) -> tuple[list[dict], SyncPlan | None]:
+        wanted = PLATFORM_MAP.get(state.console)
+        if wanted is None:
+            return platforms, SyncPlan(
+                "blocked",
+                state.ra_game_id,
+                state.title,
+                f"no Backloggery platform mapping for {state.console}",
+            )
+        existing = next((item for item in platforms if item.get("title") == wanted), None)
+        if existing is not None:
+            return platforms, None
+        if self.config.dry_run:
+            return platforms, SyncPlan(
+                "platform_required",
+                state.ra_game_id,
+                state.title,
+                f"would register Backloggery platform {wanted}",
+            )
+
+        refreshed = self.backloggery.platforms()
+        existing = next((item for item in refreshed if item.get("title") == wanted), None)
+        if existing is not None:
+            return refreshed, None
+        matches = [item for item in self.backloggery.platform_catalog() if item.get("title") == wanted]
+        if len(matches) != 1:
+            raise UpstreamError(f"Backloggery platform catalog did not contain one exact {wanted} match")
+        catalog_platform = matches[0]
+        self.backloggery.add_platform(catalog_platform)
+        confirmed = self.backloggery.platforms()
+        registered = next(
+            (
+                item
+                for item in confirmed
+                if item.get("title") == wanted
+                and int(item.get("platform_id", 0)) == int(catalog_platform["platform_id"])
+            ),
+            None,
+        )
+        if registered is None:
+            raise UpstreamError(f"Backloggery did not confirm the new {wanted} platform")
+        logger.info(
+            {
+                "event": "platform_registered",
+                "platform": wanted,
+                "platform_id": int(registered["platform_id"]),
+            }
+        )
+        return confirmed, None
+
     def cycle(self) -> CycleResult:
         recent = self.ra.recently_played()
         if recent is None:
@@ -148,7 +202,32 @@ class WatchdogService:
         progress = self.ra.game_progress(game_id)
         hashes = self.ra.game_hashes(game_id)
         state = normalize_game_state(recent, summary, progress, hashes)
+        logger.info(
+            {
+                "event": "rich_presence",
+                "title": state.title,
+                "value": state.rich_presence,
+            }
+        )
         platforms = self.backloggery.platforms()
+        platforms, platform_plan = self._ensure_platform(state, platforms)
+        if platform_plan is not None:
+            logger.info(
+                {
+                    "event": "sync_plan",
+                    "dry_run": self.config.dry_run,
+                    "plan": platform_plan.as_dict(),
+                    "summary": platform_plan.reason,
+                }
+            )
+            watch = self.store.observe(
+                state.ra_game_id,
+                state.fingerprint,
+                state.online,
+                self.config.offline_stable_polls,
+            )
+            self.store.heartbeat(True)
+            return CycleResult(platform_plan, watch.active, watch.stable_polls)
         library = self.backloggery.library(self.config.backloggery_username)
         mapping = self.store.get_mapping(state.ra_game_id)
         existing = self.backloggery.game(mapping) if mapping is not None else None
