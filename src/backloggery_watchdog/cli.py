@@ -86,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
             config.php_session_id,
             config.log_token,
             allow_writes=not config.dry_run,
+            stealth_save=config.stealth_save,
         )
         try:
             if args.command == "auth-check":

@@ -16,8 +16,10 @@ class BackloggeryClient:
         log_token: str,
         allow_writes: bool = False,
         transport: httpx.BaseTransport | None = None,
+        stealth_save: bool = False,
     ):
         self.allow_writes = allow_writes
+        self.stealth_save = stealth_save
         self.client = httpx.Client(
             base_url=BACKLOGGERY_BASE,
             timeout=20,
@@ -91,7 +93,7 @@ class BackloggeryClient:
 
     def add_game(self, payload: dict[str, Any]) -> int:
         body = dict(payload)
-        body.update({"is_stealth": False, "update_parent": False})
+        body.update({"is_stealth": self.stealth_save, "update_parent": False})
         body.setdefault("priority", 40)
         body.setdefault("notes", "")
         data = self._post("/api/add_game.php", body)
@@ -118,7 +120,7 @@ class BackloggeryClient:
         body = dict(payload)
         body.setdefault("prev_status", payload.get("status"))
         body.setdefault("prev_own", payload.get("own"))
-        body["is_stealth"] = False
+        body["is_stealth"] = self.stealth_save
         body["update_parent"] = bool(payload.get("update_parent", False))
         data = self._post("/api/update_game.php", body)
         if not isinstance(data, dict) or data.get("status") not in {1, True}:
