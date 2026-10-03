@@ -1,3 +1,6 @@
+import os
+import stat
+
 from backloggery_watchdog.state import StateStore
 
 
@@ -8,6 +11,23 @@ def test_mapping_persists_across_reopen(tmp_path):
     store.close()
     reopened = StateStore(path)
     assert reopened.get_mapping(10) == 20
+
+
+def test_state_database_respects_private_process_umask(tmp_path):
+    previous = os.umask(0o077)
+    try:
+        path = tmp_path / "state.db"
+        StateStore(str(path)).close()
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    finally:
+        os.umask(previous)
+
+
+def test_existing_state_database_is_tightened_to_owner_only(tmp_path):
+    path = tmp_path / "state.db"
+    path.touch(mode=0o644)
+    StateStore(str(path)).close()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_active_watch_requires_three_unchanged_offline_polls(tmp_path):

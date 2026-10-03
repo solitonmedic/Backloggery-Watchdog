@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
 
@@ -58,6 +59,7 @@ def _health(store: StateStore, config: Config) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    os.umask(0o077)
     args = _parser().parse_args(argv)
     try:
         config = Config.from_env()

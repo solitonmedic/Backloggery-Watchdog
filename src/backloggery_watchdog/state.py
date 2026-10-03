@@ -44,6 +44,7 @@ class StateStore:
             """
         )
         self.db.commit()
+        Path(path).chmod(0o600)
 
     def close(self) -> None:
         self.db.close()
