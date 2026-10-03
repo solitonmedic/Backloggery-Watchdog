@@ -8,7 +8,7 @@ from .backloggery import BackloggeryClient
 from .config import Config
 from .errors import AuthenticationError, UpstreamError
 from .models import GameState, SyncPlan
-from .planner import PLATFORM_MAP, REGION_CODES, STATUS_NAMES, build_plan
+from .planner import REGION_CODES, STATUS_NAMES, build_plan, resolve_platform_title
 from .ra import RetroAchievementsClient, normalize_game_state
 from .state import StateStore
 
@@ -142,7 +142,7 @@ class WatchdogService:
         state: GameState,
         platforms: list[dict],
     ) -> tuple[list[dict], SyncPlan | None]:
-        wanted = PLATFORM_MAP.get(state.console)
+        wanted = resolve_platform_title(state.console, state.region)
         if wanted is None:
             return platforms, SyncPlan(
                 "blocked",
@@ -209,6 +209,29 @@ class WatchdogService:
                 "value": state.rich_presence,
             }
         )
+        if state.region is None:
+            plan = SyncPlan(
+                "blocked",
+                state.ra_game_id,
+                state.title,
+                "region could not be derived from supported hashes",
+            )
+            logger.info(
+                {
+                    "event": "sync_plan",
+                    "dry_run": self.config.dry_run,
+                    "plan": plan.as_dict(),
+                    "summary": plan.reason,
+                }
+            )
+            watch = self.store.observe(
+                state.ra_game_id,
+                state.fingerprint,
+                state.online,
+                self.config.offline_stable_polls,
+            )
+            self.store.heartbeat(True)
+            return CycleResult(plan, watch.active, watch.stable_polls)
         platforms = self.backloggery.platforms()
         platforms, platform_plan = self._ensure_platform(state, platforms)
         if platform_plan is not None:

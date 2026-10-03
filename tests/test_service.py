@@ -4,8 +4,9 @@ from backloggery_watchdog.state import StateStore
 
 
 class FakeRA:
-    def __init__(self, console="PlayStation 2"):
+    def __init__(self, console="PlayStation 2", hashes=None):
         self.console = console
+        self.hashes = [{"Name": "USA"}] if hashes is None else hashes
 
     def recently_played(self):
         return {
@@ -24,16 +25,17 @@ class FakeRA:
         return {"NumAchieved": 18, "NumAchievements": 67, "Achievements": {}}
 
     def game_hashes(self, game_id):
-        return [{"Name": "USA"}]
+        return self.hashes
 
 
 class FakeBackloggery:
-    def __init__(self, race_candidate=False, platform_present=True):
+    def __init__(self, race_candidate=False, platform_present=True, catalog_title="Dreamcast"):
         self.library_calls = 0
         self.add_calls = 0
         self.platform_add_calls = 0
         self.race_candidate = race_candidate
         self.platform_present = platform_present
+        self.catalog_title = catalog_title
         self.current_platform = {
             "platform_id": 132,
             "title": "PlayStation 2",
@@ -46,7 +48,7 @@ class FakeBackloggery:
         return [self.current_platform] if self.platform_present else []
 
     def platform_catalog(self):
-        return [{"platform_id": 40, "title": "Dreamcast", "abbr": "DC", "format": 3}]
+        return [{"platform_id": 40, "title": self.catalog_title, "abbr": "DC", "format": 3}]
 
     def add_platform(self, platform):
         self.platform_add_calls += 1
@@ -135,5 +137,48 @@ def test_dry_run_reports_missing_platform_without_registering_it(tmp_path):
         destination,
     ).cycle()
     assert result.plan.action == "platform_required"
+    assert destination.platform_add_calls == 0
+    assert destination.add_calls == 0
+
+
+def test_live_cycle_registers_region_selected_platform(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    destination = FakeBackloggery(platform_present=False, catalog_title="Sega Genesis")
+    result = WatchdogService(
+        config(tmp_path / "state.db"),
+        store,
+        FakeRA(console="Genesis/Mega Drive", hashes=[{"Name": "USA"}]),
+        destination,
+    ).cycle()
+    assert result.plan.action == "create"
+    assert destination.platform_add_calls == 1
+    assert destination.current_platform["title"] == "Sega Genesis"
+    assert destination.add_calls == 1
+
+
+def test_unresolved_region_blocks_before_platform_registration(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    destination = FakeBackloggery(platform_present=False, catalog_title="Sega Genesis")
+    result = WatchdogService(
+        config(tmp_path / "state.db"),
+        store,
+        FakeRA(console="Genesis/Mega Drive", hashes=[{"Name": "Korea"}]),
+        destination,
+    ).cycle()
+    assert result.plan.action == "blocked"
+    assert destination.platform_add_calls == 0
+    assert destination.add_calls == 0
+
+
+def test_missing_region_blocks_before_platform_registration(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    destination = FakeBackloggery(platform_present=False)
+    result = WatchdogService(
+        config(tmp_path / "state.db"),
+        store,
+        FakeRA(console="Dreamcast", hashes=[]),
+        destination,
+    ).cycle()
+    assert result.plan.action == "blocked"
     assert destination.platform_add_calls == 0
     assert destination.add_calls == 0
