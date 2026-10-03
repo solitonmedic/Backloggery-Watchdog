@@ -75,7 +75,12 @@ class PlainFormatter(logging.Formatter):
             if value is None:
                 return prefix + f"Rich Presence unavailable | {data.get('title')} | existing Notes preserved"
             readable = str(value).replace("\r", " ").replace("\n", " ")
-            return prefix + f"Rich Presence | {data.get('title')} | {readable}"
+            return prefix + f"Notes content | {data.get('title')} | {readable}"
+        if event == "title_resolution":
+            return prefix + (
+                f"Game title unresolved | RA {data.get('ra_game_id')} | "
+                f"using {data.get('title')} | {data.get('reason')}"
+            )
         if event == "platform_registered":
             return prefix + (
                 f"Platform registered | {data.get('platform')} | "

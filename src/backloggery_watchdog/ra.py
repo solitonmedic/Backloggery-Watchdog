@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import re
 from typing import Any
 
 import httpx
@@ -74,6 +75,12 @@ class RetroAchievementsClient:
     def game_hashes(self, game_id: int) -> Any:
         return self._get("/API_GetGameHashes.php", {"i": game_id})
 
+    def game_extended(self, game_id: int) -> dict[str, Any]:
+        data = self._get("/API_GetGameExtended.php", {"i": game_id})
+        if not isinstance(data, dict):
+            raise UpstreamError("RetroAchievements extended game response was malformed")
+        return data
+
 
 REGION_ALIASES: tuple[tuple[str, str, int], ...] = (
     ("north america", "North America", 1),
@@ -119,6 +126,56 @@ def derive_region(hashes: Any) -> str | None:
     return min(matches)[2] if matches else None
 
 
+def _hash_records(hashes: Any) -> list[dict[str, Any]]:
+    if isinstance(hashes, dict):
+        for key in ("Results", "results"):
+            if isinstance(hashes.get(key), list):
+                return [item for item in hashes[key] if isinstance(item, dict)]
+        return [hashes] if any(key.lower() == "name" for key in hashes) else []
+    if isinstance(hashes, list):
+        return [item for item in hashes if isinstance(item, dict)]
+    return []
+
+
+_SUBSET_SUFFIX = re.compile(r"\s*\[Subset\s*-\s*(.*?)\]\s*$", re.IGNORECASE)
+_HASH_EXTENSION = re.compile(r"\.(?:md|bin|cue|iso|img|chd|rom|nes|sfc|smc|gba|gbc|gb|nds|n64|z64|v64|zip|7z)\s*$", re.IGNORECASE)
+_HASH_METADATA_GROUP = re.compile(
+    r"\s*\((?=[^)]*(?:japan|japanese|rev(?:ision)?\b|disc\s*\d|side\s*[ab]|"
+    r"track\s*\d|version\b|\b(?:en|ja|fr|de|es|it)(?:[, /]|$)))[^()]*\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _subset_title(value: str) -> str | None:
+    match = _SUBSET_SUFFIX.search(value)
+    return match.group(1).strip() if match else None
+
+
+def _japanese_hash_titles(hashes: Any) -> list[str]:
+    titles: list[str] = []
+    for item in _hash_records(hashes):
+        name = item.get("Name") or item.get("name")
+        if not isinstance(name, str) or derive_region([name]) != "Japan":
+            continue
+        title = _HASH_EXTENSION.sub("", name.strip())
+        while _HASH_METADATA_GROUP.search(title):
+            title = _HASH_METADATA_GROUP.sub("", title)
+        title = title.strip()
+        if title:
+            titles.append(title)
+    return titles
+
+
+def _japanese_hash_title(hashes: Any) -> tuple[str | None, bool]:
+    titles = _japanese_hash_titles(hashes)
+    if not titles:
+        return None, False
+    unique = {title.casefold(): title for title in titles}
+    if len(unique) != 1:
+        return None, True
+    return next(iter(unique.values())), False
+
+
 def _int_value(*values: Any) -> int:
     for value in values:
         if value is not None and value != "":
@@ -143,7 +200,8 @@ def _earned(value: Any) -> bool:
 
 
 def normalize_game_state(
-    recent: dict[str, Any], summary: dict[str, Any], progress: dict[str, Any], hashes: Any
+    recent: dict[str, Any], summary: dict[str, Any], progress: dict[str, Any], hashes: Any,
+    extended: dict[str, Any] | None = None,
 ) -> GameState:
     game_id = _int_value(recent.get("GameID"), recent.get("game_id"), recent.get("ID"))
     if not game_id:
@@ -172,9 +230,22 @@ def normalize_game_state(
         for item in _achievements(progress)
     )
 
+    extended = extended or {}
+    raw_title = str(recent.get("Title") or progress.get("Title") or extended.get("Title") or "").strip()
+    subset_title = _subset_title(raw_title) or _subset_title(str(extended.get("Title") or ""))
+    parent_id = _int_value(extended.get("ParentGameID"), extended.get("parentGameId"))
+    is_subset = parent_id > 0 or subset_title is not None
+    title = _SUBSET_SUFFIX.sub("", raw_title).strip()
+    japanese_title, title_conflict = _japanese_hash_title(hashes)
+    if japanese_title:
+        title = japanese_title
+    region = derive_region(hashes)
+    if region is None and is_subset:
+        region = "North America"
+
     return GameState(
         ra_game_id=game_id,
-        title=str(recent.get("Title") or progress.get("Title") or "").strip(),
+        title=title,
         console=str(recent.get("ConsoleName") or progress.get("ConsoleName") or "").strip(),
         last_played=str(recent.get("LastPlayed") or ""),
         rich_presence=rich_presence,
@@ -183,5 +254,9 @@ def normalize_game_state(
         total=total,
         beaten=beaten,
         mastered=mastered,
-        region=derive_region(hashes),
+        region=region,
+        subset_title=subset_title,
+        title_resolution_warning=(
+            "conflicting Japanese hash titles; retained RA game title" if title_conflict else None
+        ),
     )

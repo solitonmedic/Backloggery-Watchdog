@@ -147,8 +147,8 @@ def _managed_values(state: GameState, platform: dict[str, Any]) -> dict[str, Any
         "achieve_score": state.earned,
         "achieve_total": state.total,
     }
-    if state.rich_presence is not None:
-        values["notes"] = state.rich_presence
+    if state.notes is not None:
+        values["notes"] = state.notes
     return values
 
 

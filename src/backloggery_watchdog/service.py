@@ -201,12 +201,20 @@ class WatchdogService:
         summary = self.ra.summary(game_id)
         progress = self.ra.game_progress(game_id)
         hashes = self.ra.game_hashes(game_id)
-        state = normalize_game_state(recent, summary, progress, hashes)
+        extended = self.ra.game_extended(game_id)
+        state = normalize_game_state(recent, summary, progress, hashes, extended)
+        if state.title_resolution_warning:
+            logger.warning({
+                "event": "title_resolution",
+                "ra_game_id": state.ra_game_id,
+                "title": state.title,
+                "reason": state.title_resolution_warning,
+            })
         logger.info(
             {
                 "event": "rich_presence",
                 "title": state.title,
-                "value": state.rich_presence,
+                "value": state.notes,
             }
         )
         if state.region is None:

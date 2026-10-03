@@ -4,14 +4,16 @@ from backloggery_watchdog.state import StateStore
 
 
 class FakeRA:
-    def __init__(self, console="PlayStation 2", hashes=None):
+    def __init__(self, console="PlayStation 2", hashes=None, title="Kingdom Hearts", extended=None):
         self.console = console
         self.hashes = [{"Name": "USA"}] if hashes is None else hashes
+        self.title = title
+        self.extended = extended or {}
 
     def recently_played(self):
         return {
             "GameID": 32650,
-            "Title": "Kingdom Hearts",
+            "Title": self.title,
             "ConsoleName": self.console,
             "LastPlayed": "2026-09-28",
             "NumAchieved": 18,
@@ -26,6 +28,9 @@ class FakeRA:
 
     def game_hashes(self, game_id):
         return self.hashes
+
+    def game_extended(self, game_id):
+        return self.extended
 
 
 class FakeBackloggery:
@@ -182,3 +187,18 @@ def test_missing_region_blocks_before_platform_registration(tmp_path):
     assert result.plan.action == "blocked"
     assert destination.platform_add_calls == 0
     assert destination.add_calls == 0
+
+
+def test_subset_live_create_uses_clean_title_and_combined_notes(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    destination = FakeBackloggery()
+    ra = FakeRA(
+        hashes=[],
+        title="Biohazard Outbreak [Subset - Online Multiplayer]",
+        extended={"ParentGameID": 5761},
+    )
+    result = WatchdogService(config(tmp_path / "state.db"), store, ra, destination).cycle()
+    assert result.plan.action == "create"
+    assert destination.last_game_payload["title"] == "Biohazard Outbreak"
+    assert destination.last_game_payload["region"] == 2
+    assert destination.last_game_payload["notes"] == "World: Test [Subset - Online Multiplayer]"

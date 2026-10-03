@@ -17,6 +17,19 @@ class GameState:
     beaten: bool
     mastered: bool
     region: str | None
+    subset_title: str | None = None
+    title_resolution_warning: str | None = None
+
+    @property
+    def notes(self) -> str | None:
+        if self.rich_presence is None:
+            return None
+        if not self.subset_title:
+            return self.rich_presence
+        marker = f"[Subset - {self.subset_title}]"
+        if marker.casefold() in self.rich_presence.casefold():
+            return self.rich_presence
+        return f"{self.rich_presence} {marker}"
 
     @property
     def status(self) -> str:
@@ -31,7 +44,7 @@ class GameState:
     @property
     def fingerprint(self) -> str:
         return "\x1f".join(
-            [self.rich_presence or "", self.last_played, str(self.earned), str(self.total)]
+            [self.notes or "", self.last_played, str(self.earned), str(self.total)]
         )
 
 
