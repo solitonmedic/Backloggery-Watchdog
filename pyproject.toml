@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backloggery-watchdog"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["httpx==0.28.1"]
+
+[project.scripts]
+backloggery-watchdog = "backloggery_watchdog.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
