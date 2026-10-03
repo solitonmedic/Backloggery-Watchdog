@@ -10,3 +10,17 @@ htmlcov/
 data/
 build/
 *.egg-info/
+
+# Local development environments and tool caches (not used by the runtime image)
+.venv/
+venv/
+.tox/
+.nox/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+
+# Local build and coverage outputs (the image installs directly from source)
+dist/
+.coverage.*
+coverage.xml

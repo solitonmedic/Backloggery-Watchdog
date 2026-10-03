@@ -49,6 +49,14 @@ class StateStore:
                 override_value TEXT,
                 PRIMARY KEY (ra_game_id, field_name)
             );
+            CREATE TABLE IF NOT EXISTS priority_tracking (
+                ra_game_id INTEGER PRIMARY KEY,
+                last_fingerprint TEXT NOT NULL,
+                offline_since TEXT,
+                online INTEGER NOT NULL,
+                mastered INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         self.db.commit()
@@ -208,6 +216,43 @@ class StateStore:
         )
         self.db.commit()
         return WatchState(active=active, stable_polls=stable)
+
+    def priority_tracking(self) -> list[dict[str, object]]:
+        rows = self.db.execute(
+            "SELECT ra_game_id, last_fingerprint, offline_since, online, mastered "
+            "FROM priority_tracking ORDER BY ra_game_id"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_priority_tracking(self, ra_game_id: int) -> dict[str, object] | None:
+        row = self.db.execute(
+            "SELECT ra_game_id, last_fingerprint, offline_since, online, mastered "
+            "FROM priority_tracking WHERE ra_game_id=?",
+            (ra_game_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_priority_tracking(
+        self,
+        ra_game_id: int,
+        fingerprint: str,
+        offline_since: str | None,
+        online: bool,
+        mastered: bool,
+    ) -> None:
+        self.db.execute(
+            """INSERT INTO priority_tracking
+               (ra_game_id, last_fingerprint, offline_since, online, mastered, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(ra_game_id) DO UPDATE SET
+                 last_fingerprint=excluded.last_fingerprint,
+                 offline_since=excluded.offline_since,
+                 online=excluded.online,
+                 mastered=excluded.mastered,
+                 updated_at=excluded.updated_at""",
+            (ra_game_id, fingerprint, offline_since, int(online), int(mastered), utc_now()),
+        )
+        self.db.commit()
 
     def set_runtime(self, key: str, value: str) -> None:
         self.db.execute(

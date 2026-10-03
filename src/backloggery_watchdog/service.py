@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from .backloggery import BackloggeryClient
 from .config import Config
@@ -13,6 +14,22 @@ from .ra import RetroAchievementsClient, normalize_game_state
 from .state import StateStore
 
 logger = logging.getLogger(__name__)
+
+PRIORITY_NOW_PLAYING = 80
+PRIORITY_PAUSED = 60
+PRIORITY_HIGH = 50
+PRIORITY_NORMAL = 40
+PRIORITY_LOW = 30
+PRIORITY_NAMES = {
+    PRIORITY_NOW_PLAYING: "Now Playing",
+    70: "Ongoing",
+    PRIORITY_PAUSED: "Paused",
+    PRIORITY_HIGH: "High",
+    PRIORITY_NORMAL: "Normal",
+    PRIORITY_LOW: "Low",
+    20: "Replay",
+    10: "Shelved",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +90,10 @@ class WatchdogService:
                     }
                 )
                 return refreshed
-            entry_id = self.backloggery.add_game(refreshed.proposed_payload)
+            create_payload = dict(refreshed.proposed_payload)
+            if state.online:
+                create_payload["priority"] = PRIORITY_NOW_PLAYING
+            entry_id = self.backloggery.add_game(create_payload)
             self.store.set_mapping(state.ra_game_id, entry_id)
             confirmed = self.backloggery.game(entry_id)
             if confirmed is None:
@@ -156,6 +176,134 @@ class WatchdogService:
             return refreshed
         return plan
 
+    def _sync_priority_lifecycle(self, state: GameState | None, watch_active: bool = False) -> None:
+        """Apply priority aging only to games previously observed Online."""
+        tracked = self.store.priority_tracking()
+        now = datetime.now(UTC)
+        now_text = now.isoformat()
+        current_id = state.ra_game_id if state is not None else None
+
+        # A newly reported RA game ends the previous game's Now Playing period.
+        for record in tracked:
+            ra_game_id = int(record["ra_game_id"])
+            if bool(record["online"]) and current_id is not None and ra_game_id != current_id:
+                self.store.set_priority_tracking(
+                    ra_game_id,
+                    str(record["last_fingerprint"]),
+                    now_text,
+                    False,
+                    bool(record["mastered"]),
+                )
+
+        if state is not None:
+            mapping = self.store.get_mapping(state.ra_game_id)
+            existing_track = self.store.get_priority_tracking(state.ra_game_id)
+            if mapping is not None and (state.online or watch_active or existing_track is not None):
+                if state.online or watch_active:
+                    offline_since = None
+                    online = True
+                else:
+                    changed = (
+                        existing_track is None
+                        or str(existing_track["last_fingerprint"]) != state.fingerprint
+                    )
+                    offline_since = (
+                        now_text
+                        if existing_track is None or bool(existing_track["online"]) or changed
+                        else existing_track["offline_since"]
+                    )
+                    online = False
+                self.store.set_priority_tracking(
+                    state.ra_game_id,
+                    state.fingerprint,
+                    str(offline_since) if offline_since is not None else None,
+                    online,
+                    state.mastered,
+                )
+
+        for record in self.store.priority_tracking():
+            ra_game_id = int(record["ra_game_id"])
+            entry_id = self.store.get_mapping(ra_game_id)
+            if entry_id is None:
+                continue
+            if bool(record["online"]):
+                desired = PRIORITY_NOW_PLAYING
+                reason = "RA reports Online or its Offline confirmation window is still open"
+            else:
+                offline_since = record["offline_since"]
+                if not offline_since:
+                    continue
+                elapsed = now - datetime.fromisoformat(str(offline_since)).astimezone(UTC)
+                step = timedelta(days=self.config.priority_decay_days)
+                mastered = bool(record["mastered"])
+                if elapsed >= step * 3 and not mastered:
+                    desired = PRIORITY_LOW
+                    reason = "no RA updates for three priority intervals"
+                elif elapsed >= step * 2 and mastered:
+                    desired = PRIORITY_NORMAL
+                    reason = "mastered game returns to Normal after two priority intervals"
+                elif elapsed >= step * 2:
+                    desired = PRIORITY_HIGH
+                    reason = "no RA updates for two priority intervals"
+                elif elapsed >= step:
+                    desired = PRIORITY_PAUSED
+                    reason = "no RA updates for one priority interval"
+                else:
+                    continue
+
+            latest = self.backloggery.game(entry_id)
+            if latest is None:
+                logger.warning(
+                    {
+                        "event": "priority_sync_skipped",
+                        "ra_game_id": ra_game_id,
+                        "reason": "mapped entry not found",
+                    }
+                )
+                continue
+            try:
+                current_priority = int(latest.get("priority", PRIORITY_NORMAL))
+            except (TypeError, ValueError):
+                current_priority = PRIORITY_NORMAL
+            if current_priority == desired:
+                continue
+            if not bool(record["online"]) and current_priority not in {
+                PRIORITY_NOW_PLAYING,
+                PRIORITY_PAUSED,
+                PRIORITY_HIGH,
+                PRIORITY_NORMAL,
+                PRIORITY_LOW,
+            }:
+                # Preserve manually selected Ongoing, Replay, and Shelved priorities.
+                continue
+            event = {
+                "event": "priority_plan",
+                "dry_run": self.config.dry_run,
+                "ra_game_id": ra_game_id,
+                "backloggery_entry_id": entry_id,
+                "title": latest.get("title"),
+                "from": PRIORITY_NAMES.get(current_priority, str(current_priority)),
+                "to": PRIORITY_NAMES[desired],
+                "reason": reason,
+            }
+            if self.config.dry_run:
+                logger.info(event)
+                continue
+            payload = dict(latest)
+            payload["priority"] = desired
+            payload["prev_status"] = latest.get("status")
+            payload["prev_own"] = latest.get("own")
+            self.backloggery.update_game(payload)
+            confirmed = self.backloggery.game(entry_id)
+            try:
+                confirmed_priority = int(confirmed.get("priority", -1)) if confirmed else -1
+            except (TypeError, ValueError):
+                confirmed_priority = -1
+            if confirmed_priority != desired:
+                raise UpstreamError("Backloggery priority update could not be verified")
+            event["event"] = "priority_updated"
+            logger.info(event)
+
     def _ensure_platform(
         self,
         state: GameState,
@@ -214,6 +362,7 @@ class WatchdogService:
         recent = self.ra.recently_played()
         if recent is None:
             plan = SyncPlan("noop", 0, "", "no recently played game")
+            self._sync_priority_lifecycle(None)
             self.store.heartbeat(True)
             return CycleResult(plan, False, 0)
         game_id = int(recent.get("GameID") or recent.get("game_id") or recent.get("ID") or 0)
@@ -257,6 +406,7 @@ class WatchdogService:
                 state.online,
                 self.config.offline_stable_polls,
             )
+            self._sync_priority_lifecycle(state, watch.active)
             self.store.heartbeat(True)
             return CycleResult(plan, watch.active, watch.stable_polls)
         platforms = self.backloggery.platforms()
@@ -276,6 +426,7 @@ class WatchdogService:
                 state.online,
                 self.config.offline_stable_polls,
             )
+            self._sync_priority_lifecycle(state, watch.active)
             self.store.heartbeat(True)
             return CycleResult(platform_plan, watch.active, watch.stable_polls)
         library = self.backloggery.library(self.config.backloggery_username)
@@ -305,6 +456,7 @@ class WatchdogService:
             state.online,
             self.config.offline_stable_polls,
         )
+        self._sync_priority_lifecycle(state, watch.active)
         self.store.heartbeat(True)
         return CycleResult(plan, watch.active, watch.stable_polls)
 
@@ -315,6 +467,7 @@ class WatchdogService:
                 "dry_run": self.config.dry_run,
                 "offline_poll_seconds": self.config.offline_poll_seconds,
                 "online_poll_seconds": self.config.online_poll_seconds,
+                "priority_decay_days": self.config.priority_decay_days,
             }
         )
         while True:
