@@ -46,7 +46,7 @@ def test_plain_formatter_uses_plain_language_for_noop():
     assert "Up to date | Kingdom Hearts | no changes needed" in PlainFormatter().format(record)
 
 
-def test_plain_formatter_displays_rich_presence_on_one_line():
+def test_plain_formatter_displays_exact_notes_content_on_one_line():
     record = logging.LogRecord(
         "watchdog",
         logging.INFO,
@@ -57,5 +57,18 @@ def test_plain_formatter_displays_rich_presence_on_one_line():
         None,
     )
     rendered = PlainFormatter().format(record)
-    assert "Rich Presence | Game | World: Test Expert" in rendered
+    assert "Notes content | Game | World: Test Expert" in rendered
     assert rendered.count("\n") == 0
+
+
+def test_plain_formatter_reports_unresolved_hash_title():
+    record = logging.LogRecord(
+        "watchdog",
+        logging.WARNING,
+        "",
+        0,
+        {"event": "title_resolution", "ra_game_id": 10, "title": "Game", "reason": "conflicting Japanese hash titles"},
+        (),
+        None,
+    )
+    assert "Game title unresolved | RA 10 | using Game" in PlainFormatter().format(record)

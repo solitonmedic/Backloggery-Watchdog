@@ -29,6 +29,16 @@ def test_ra_invalid_json_is_upstream_error():
         client.profile()
 
 
+@respx.mock
+def test_ra_extended_game_metadata_uses_target_game_endpoint():
+    route = respx.get("https://retroachievements.org/API/API_GetGameExtended.php").mock(
+        return_value=httpx.Response(200, json={"ID": 10, "ParentGameID": 5})
+    )
+    client = RetroAchievementsClient("key", "user")
+    assert client.game_extended(10)["ParentGameID"] == 5
+    assert route.calls[0].request.url.params["i"] == "10"
+
+
 def test_backloggery_writes_are_disabled_by_default():
     client = BackloggeryClient("session", "token")
     with pytest.raises(UpstreamError, match="unauthorized endpoint"):
