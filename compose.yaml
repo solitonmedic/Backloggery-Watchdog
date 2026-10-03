@@ -1,0 +1,25 @@
+services:
+  watchdog:
+    container_name: backloggery-watchdog
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    user: "1001:1001"
+    env_file:
+      - .env
+    environment:
+      WATCHDOG_DRY_RUN: "${WATCHDOG_DRY_RUN:-true}"
+      WATCHDOG_DATABASE_PATH: "${WATCHDOG_DATABASE_PATH:-/data/watchdog.db}"
+      WATCHDOG_OFFLINE_POLL_SECONDS: "${WATCHDOG_OFFLINE_POLL_SECONDS:-900}"
+      WATCHDOG_ONLINE_POLL_SECONDS: "${WATCHDOG_ONLINE_POLL_SECONDS:-60}"
+      WATCHDOG_OFFLINE_STABLE_POLLS: "${WATCHDOG_OFFLINE_STABLE_POLLS:-3}"
+      WATCHDOG_LOG_LEVEL: "${WATCHDOG_LOG_LEVEL:-INFO}"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "backloggery-watchdog", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
