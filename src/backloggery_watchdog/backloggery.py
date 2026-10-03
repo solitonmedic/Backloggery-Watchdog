@@ -31,11 +31,16 @@ class BackloggeryClient:
 
     def _post(self, endpoint: str, body: dict[str, Any]) -> Any:
         read_endpoints = {
+            "/api/fetch_platforms.php",
             "/api/fetch_user_platforms.php",
             "/api/fetch_library.php",
             "/api/fetch_gameinfo.php",
         }
-        write_endpoints = {"/api/add_game.php", "/api/update_game.php"}
+        write_endpoints = {
+            "/api/add_game.php",
+            "/api/update_game.php",
+            "/api/add_user_platform.php",
+        }
         if endpoint not in read_endpoints and not (self.allow_writes and endpoint in write_endpoints):
             raise UpstreamError("Backloggery connector rejected an unauthorized endpoint")
         try:
@@ -68,6 +73,9 @@ class BackloggeryClient:
     def platforms(self) -> list[dict[str, Any]]:
         return self._payload(self._post("/api/fetch_user_platforms.php", {"get_owner_platforms": True}))
 
+    def platform_catalog(self) -> list[dict[str, Any]]:
+        return self._payload(self._post("/api/fetch_platforms.php", {}))
+
     def library(self, username: str) -> list[dict[str, Any]]:
         return self._payload(self._post("/api/fetch_library.php", {"username": username}))
 
@@ -94,6 +102,17 @@ class BackloggeryClient:
         if entry_id < 1:
             raise UpstreamError("Backloggery did not return a new entry ID")
         return entry_id
+
+    def add_platform(self, platform: dict[str, Any]) -> None:
+        body = {
+            "platform_id": int(platform["platform_id"]),
+            "title": str(platform["title"]),
+            "abbr": str(platform["abbr"]),
+            "format": int(platform["format"]),
+        }
+        data = self._post("/api/add_user_platform.php", body)
+        if not isinstance(data, dict) or data.get("payload") is not True:
+            raise UpstreamError("Backloggery rejected the platform registration")
 
     def update_game(self, payload: dict[str, Any]) -> None:
         body = dict(payload)

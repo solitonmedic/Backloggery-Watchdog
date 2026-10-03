@@ -33,6 +33,8 @@ def test_backloggery_writes_are_disabled_by_default():
     client = BackloggeryClient("session", "token")
     with pytest.raises(UpstreamError, match="unauthorized endpoint"):
         client.add_game({"title": "Game"})
+    with pytest.raises(UpstreamError, match="unauthorized endpoint"):
+        client.add_platform({"platform_id": 40, "title": "Dreamcast", "abbr": "DC", "format": 3})
 
 
 @respx.mock
@@ -59,6 +61,38 @@ def test_live_update_posts_preserved_full_object_with_previous_values():
     assert body["prev_status"] == 20
     assert body["review"] == "keep"
     assert body["is_stealth"] is False
+
+
+@respx.mock
+def test_live_platform_add_posts_exact_catalog_fields():
+    route = respx.post("https://backloggery.com/api/add_user_platform.php").mock(
+        return_value=httpx.Response(200, json={"msg": "", "payload": True})
+    )
+    client = BackloggeryClient("session", "token", allow_writes=True)
+    client.add_platform(
+        {"platform_id": 40, "title": "Dreamcast", "abbr": "DC", "format": 3, "ignored": "value"}
+    )
+    assert json.loads(route.calls[0].request.content) == {
+        "platform_id": 40,
+        "title": "Dreamcast",
+        "abbr": "DC",
+        "format": 3,
+    }
+
+
+@respx.mock
+def test_platform_catalog_is_read_from_the_observed_endpoint():
+    respx.post("https://backloggery.com/api/fetch_platforms.php").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": 1,
+                "payload": [{"platform_id": 40, "title": "Dreamcast", "abbr": "DC", "format": 3}],
+            },
+        )
+    )
+    client = BackloggeryClient("session", "token")
+    assert client.platform_catalog()[0]["title"] == "Dreamcast"
 
 
 @respx.mock
