@@ -65,6 +65,15 @@ def test_returning_a_field_to_ra_value_clears_its_override(tmp_path):
     assert store.reconcile_field_overrides(10, desired, desired) == {}
 
 
+def test_null_region_can_be_preserved_as_an_explicit_override(tmp_path):
+    store = StateStore(str(tmp_path / "state.db"))
+    overrides = store.reconcile_field_overrides(
+        10, {"title": "RA title", "region": None}, {"title": "RA title", "region": 2}
+    )
+    assert "region" in overrides
+    assert overrides["region"] is None
+
+
 def test_active_watch_requires_three_unchanged_offline_polls(tmp_path):
     store = StateStore(str(tmp_path / "state.db"))
     assert store.observe(10, "a", True, 3).active is True

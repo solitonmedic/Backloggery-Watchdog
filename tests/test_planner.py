@@ -175,3 +175,22 @@ def test_manual_title_and_region_overrides_do_not_block_ra_notes_or_progress():
     assert "title" not in plan.changes
     assert "region" not in plan.changes
     assert plan.proposed_payload["priority"] == 70
+
+
+def test_null_region_override_is_not_rewritten():
+    existing = {
+        "game_inst_id": 9,
+        "title": "Game",
+        "platform_id": 132,
+        "platform_title": "PlayStation 2",
+        "abbr": "PS2",
+        "status": 20,
+        "notes": "Place",
+        "phys_digi": 20,
+        "own": 1,
+        "region": None,
+        "achieve_score": 2,
+        "achieve_total": 10,
+    }
+    plan = build_plan(state(), PLATFORMS, [], 9, existing, {"region": None})
+    assert plan.action == "noop"

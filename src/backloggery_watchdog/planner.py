@@ -141,14 +141,14 @@ def _managed_values(
 ) -> dict[str, Any]:
     overrides = field_overrides or {}
     values: dict[str, Any] = {
-        "title": overrides.get("title", state.title),
+        "title": overrides["title"] if "title" in overrides else state.title,
         "platform_id": int(platform["platform_id"]),
         "platform_title": platform.get("title"),
         "abbr": platform.get("abbr"),
         "status": STATUS_CODES[state.status],
         "phys_digi": 20,
         "own": 1,
-        "region": overrides.get("region", REGION_CODES[state.region]),
+        "region": overrides["region"] if "region" in overrides else REGION_CODES[state.region],
         "achieve_score": state.earned,
         "achieve_total": state.total,
     }
@@ -169,6 +169,8 @@ def _safe_status(existing: Any, desired: int) -> int | Any:
 
 def _equal(key: str, current: Any, desired: Any) -> bool:
     if key in NUMERIC_FIELDS:
+        if current is None or desired is None:
+            return current is desired
         try:
             return int(current) == int(desired)
         except (TypeError, ValueError):

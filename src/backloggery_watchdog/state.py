@@ -104,6 +104,8 @@ class StateStore:
     @staticmethod
     def _same(field_name: str, current: object, desired: object) -> bool:
         if field_name == "region":
+            if current is None or desired is None:
+                return current is desired
             try:
                 return int(current) == int(desired)
             except (TypeError, ValueError):
