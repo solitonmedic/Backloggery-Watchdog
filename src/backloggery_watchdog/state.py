@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +42,13 @@ class StateStore:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS field_sync_state (
+                ra_game_id INTEGER NOT NULL,
+                field_name TEXT NOT NULL CHECK (field_name IN ('title', 'region')),
+                last_observed TEXT NOT NULL,
+                override_value TEXT,
+                PRIMARY KEY (ra_game_id, field_name)
+            );
             """
         )
         self.db.commit()
@@ -70,7 +78,109 @@ class StateStore:
         rows = self.db.execute(
             "SELECT ra_game_id, backloggery_game_inst_id, confirmed_at FROM mappings ORDER BY ra_game_id"
         ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["overrides"] = self.get_field_overrides(int(item["ra_game_id"]))
+            result.append(item)
+        return result
+
+    @staticmethod
+    def _dump_value(value: object) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _load_value(value: str | None) -> object | None:
+        return json.loads(value) if value is not None else None
+
+    def get_field_overrides(self, ra_game_id: int) -> dict[str, object]:
+        rows = self.db.execute(
+            "SELECT field_name, override_value FROM field_sync_state "
+            "WHERE ra_game_id=? AND override_value IS NOT NULL",
+            (ra_game_id,),
+        ).fetchall()
+        return {str(row["field_name"]): self._load_value(row["override_value"]) for row in rows}
+
+    @staticmethod
+    def _same(field_name: str, current: object, desired: object) -> bool:
+        if field_name == "region":
+            try:
+                return int(current) == int(desired)
+            except (TypeError, ValueError):
+                return False
+        return current == desired
+
+    def reconcile_field_overrides(
+        self,
+        ra_game_id: int,
+        current_values: dict[str, object],
+        desired_values: dict[str, object],
+    ) -> dict[str, object]:
+        """Persist user edits to title/region and return active overrides.
+
+        On first observation, a value that differs from RA is conservatively
+        treated as a user override so existing manual edits survive upgrade.
+        Later changes are detected against the last value observed from the API.
+        """
+        for field_name in ("title", "region"):
+            if field_name not in current_values or field_name not in desired_values:
+                continue
+            current = current_values[field_name]
+            desired = desired_values[field_name]
+            row = self.db.execute(
+                "SELECT last_observed, override_value FROM field_sync_state "
+                "WHERE ra_game_id=? AND field_name=?",
+                (ra_game_id, field_name),
+            ).fetchone()
+            current_json = self._dump_value(current)
+            override_json = None
+            if row is None:
+                if not self._same(field_name, current, desired):
+                    override_json = current_json
+            else:
+                prior_value = self._load_value(row["last_observed"])
+                prior_override = row["override_value"]
+                if not self._same(field_name, current, prior_value):
+                    if self._same(field_name, current, desired):
+                        override_json = None
+                    else:
+                        override_json = current_json
+                else:
+                    override_json = prior_override
+            self.db.execute(
+                "INSERT INTO field_sync_state (ra_game_id, field_name, last_observed, override_value) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(ra_game_id, field_name) DO UPDATE SET "
+                "last_observed=excluded.last_observed, override_value=excluded.override_value",
+                (ra_game_id, field_name, current_json, override_json),
+            )
+        self.db.commit()
+        return self.get_field_overrides(ra_game_id)
+
+    def record_observed_fields(self, ra_game_id: int, values: dict[str, object]) -> None:
+        for field_name in ("title", "region"):
+            if field_name in values:
+                self.db.execute(
+                    "INSERT INTO field_sync_state "
+                    "(ra_game_id, field_name, last_observed, override_value) VALUES (?, ?, ?, NULL) "
+                    "ON CONFLICT(ra_game_id, field_name) DO UPDATE SET "
+                    "last_observed=excluded.last_observed",
+                    (ra_game_id, field_name, self._dump_value(values[field_name])),
+                )
+        self.db.commit()
+
+    def clear_field_overrides(self, ra_game_id: int, field_name: str | None = None) -> None:
+        if field_name is None:
+            self.db.execute(
+                "UPDATE field_sync_state SET override_value=NULL WHERE ra_game_id=?", (ra_game_id,)
+            )
+        else:
+            if field_name not in {"title", "region"}:
+                raise ValueError("field override must be title or region")
+            self.db.execute(
+                "UPDATE field_sync_state SET override_value=NULL WHERE ra_game_id=? AND field_name=?",
+                (ra_game_id, field_name),
+            )
+        self.db.commit()
 
     def observe(self, ra_game_id: int, fingerprint: str, online: bool, stable_limit: int) -> WatchState:
         prior = self.db.execute(

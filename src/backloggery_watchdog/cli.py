@@ -31,6 +31,9 @@ def _parser() -> argparse.ArgumentParser:
     set_mapping = mapping_commands.add_parser("set")
     set_mapping.add_argument("ra_game_id", type=int)
     set_mapping.add_argument("backloggery_entry_id", type=int)
+    clear_overrides = mapping_commands.add_parser("clear-overrides")
+    clear_overrides.add_argument("ra_game_id", type=int)
+    clear_overrides.add_argument("--field", choices=("title", "region"))
     return parser
 
 
@@ -71,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.mapping_command == "set":
                 store.set_mapping(args.ra_game_id, args.backloggery_entry_id)
                 logger.info({"event": "mapping_saved", "ra_game_id": args.ra_game_id, "backloggery_entry_id": args.backloggery_entry_id})
+            elif args.mapping_command == "clear-overrides":
+                store.clear_field_overrides(args.ra_game_id, args.field)
+                logger.info({"event": "mapping_overrides_cleared", "ra_game_id": args.ra_game_id, "field": args.field or "all"})
             else:
                 print(json.dumps(store.list_mappings(), separators=(",", ":")))
             return 0
