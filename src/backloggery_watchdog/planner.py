@@ -24,6 +24,7 @@ STATUS_CODES = {"Unplayed": 10, "Unfinished": 20, "Beaten": 30, "Completed": 40}
 STATUS_NAMES = {value: key for key, value in STATUS_CODES.items()}
 REGION_CODES = {"Free": 1, "North America": 2, "Japan": 3, "PAL": 4, "Asia": 5, "China": 6, "Korea": 7, "Brazil": 8}
 NUMERIC_FIELDS = {"platform_id", "status", "phys_digi", "own", "region", "achieve_score", "achieve_total"}
+REQUEST_ONLY_FIELDS = {"platform_title", "abbr"}
 
 
 def _id(item: dict[str, Any], *names: str) -> int | None:
@@ -136,6 +137,8 @@ def build_plan(
     proposed = dict(existing_entry)
     changes: dict[str, dict[str, Any]] = {}
     for key, value in desired.items():
+        if key in REQUEST_ONLY_FIELDS:
+            continue
         if not _equal(key, existing_entry.get(key), value):
             changes[key] = {"from": existing_entry.get(key), "to": value}
             proposed[key] = value

@@ -72,8 +72,8 @@ def test_missing_rich_presence_preserves_notes():
 
 def test_numeric_strings_do_not_create_false_changes():
     existing = {
-        "game_inst_id": 9, "title": "Game", "platform_id": "132", "platform_title": "PlayStation 2",
-        "abbr": "PS2", "status": "20", "notes": "Place", "phys_digi": "20", "own": "1",
+        "game_inst_id": 9, "title": "Game", "platform_id": "132", "platform_title": None,
+        "abbr": None, "status": "20", "notes": "Place", "phys_digi": "20", "own": "1",
         "region": "2", "achieve_score": "2", "achieve_total": "10",
     }
     assert build_plan(state(), PLATFORMS, [], 9, existing).action == "noop"
