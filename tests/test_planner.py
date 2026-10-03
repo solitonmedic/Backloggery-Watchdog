@@ -143,3 +143,35 @@ def test_numeric_strings_do_not_create_false_changes():
         "region": "2", "achieve_score": "2", "achieve_total": "10",
     }
     assert build_plan(state(), PLATFORMS, [], 9, existing).action == "noop"
+
+
+def test_manual_title_and_region_overrides_do_not_block_ra_notes_or_progress():
+    existing = {
+        "game_inst_id": 9,
+        "title": "Biohazard Outbreak: File #2",
+        "platform_id": 132,
+        "platform_title": "PlayStation 2",
+        "abbr": "PS2",
+        "status": 20,
+        "notes": "Old presence",
+        "phys_digi": 20,
+        "own": 1,
+        "region": 3,
+        "achieve_score": 1,
+        "achieve_total": 10,
+        "priority": 70,
+    }
+    plan = build_plan(
+        state(rich_presence="New presence", earned=3),
+        PLATFORMS,
+        [],
+        9,
+        existing,
+        {"title": "Biohazard Outbreak: File #2", "region": 3},
+    )
+    assert plan.action == "update"
+    assert plan.changes["notes"]["to"] == "New presence"
+    assert plan.changes["achieve_score"]["to"] == 3
+    assert "title" not in plan.changes
+    assert "region" not in plan.changes
+    assert plan.proposed_payload["priority"] == 70

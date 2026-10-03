@@ -134,16 +134,21 @@ def _candidate_ids(state: GameState, library: list[dict[str, Any]], platform_id:
     return found
 
 
-def _managed_values(state: GameState, platform: dict[str, Any]) -> dict[str, Any]:
+def _managed_values(
+    state: GameState,
+    platform: dict[str, Any],
+    field_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    overrides = field_overrides or {}
     values: dict[str, Any] = {
-        "title": state.title,
+        "title": overrides.get("title", state.title),
         "platform_id": int(platform["platform_id"]),
         "platform_title": platform.get("title"),
         "abbr": platform.get("abbr"),
         "status": STATUS_CODES[state.status],
         "phys_digi": 20,
         "own": 1,
-        "region": REGION_CODES[state.region],
+        "region": overrides.get("region", REGION_CODES[state.region]),
         "achieve_score": state.earned,
         "achieve_total": state.total,
     }
@@ -177,6 +182,7 @@ def build_plan(
     library: list[dict[str, Any]],
     mapped_entry_id: int | None,
     existing_entry: dict[str, Any] | None,
+    field_overrides: dict[str, Any] | None = None,
 ) -> SyncPlan:
     platform = _platform(state, platforms)
     if platform is None:
@@ -212,7 +218,7 @@ def build_plan(
             backloggery_entry_id=mapped_entry_id,
         )
 
-    desired = _managed_values(state, platform)
+    desired = _managed_values(state, platform, field_overrides)
     desired["status"] = _safe_status(existing_entry.get("status"), desired["status"])
     proposed = dict(existing_entry)
     changes: dict[str, dict[str, Any]] = {}

@@ -57,6 +57,7 @@ class WatchdogService:
         state: GameState,
         platforms: list[dict],
         plan: SyncPlan,
+        field_overrides: dict[str, object] | None = None,
     ) -> SyncPlan:
         if plan.action == "create":
             current_mapping = self.store.get_mapping(state.ra_game_id)
@@ -77,6 +78,11 @@ class WatchdogService:
             confirmed = self.backloggery.game(entry_id)
             if confirmed is None:
                 raise UpstreamError("Backloggery created an entry but it could not be verified")
+            if confirmed is not None and state.region is not None:
+                self.store.record_observed_fields(
+                    state.ra_game_id,
+                    {"title": confirmed.get("title"), "region": confirmed.get("region")},
+                )
             verification = build_plan(state, fresh_platforms, [], entry_id, confirmed)
             if verification.action == "update":
                 raise UpstreamError("Backloggery created an entry with unexpected managed fields")
@@ -93,12 +99,19 @@ class WatchdogService:
             return refreshed
         if plan.action == "update" and plan.backloggery_entry_id is not None:
             latest = self.backloggery.game(plan.backloggery_entry_id)
+            if latest is not None and state.region is not None:
+                field_overrides = self.store.reconcile_field_overrides(
+                    state.ra_game_id,
+                    {"title": latest.get("title"), "region": latest.get("region")},
+                    {"title": state.title, "region": REGION_CODES[state.region]},
+                )
             refreshed = build_plan(
                 state,
                 platforms,
                 self.backloggery.library(self.config.backloggery_username),
                 plan.backloggery_entry_id,
                 latest,
+                field_overrides,
             )
             if refreshed.action != "update":
                 logger.warning(
@@ -122,9 +135,15 @@ class WatchdogService:
                 [],
                 plan.backloggery_entry_id,
                 confirmed,
+                field_overrides,
             )
             if verification.action == "update":
                 raise UpstreamError("Backloggery update did not reach the requested managed state")
+            if confirmed is not None:
+                self.store.record_observed_fields(
+                    state.ra_game_id,
+                    {"title": confirmed.get("title"), "region": confirmed.get("region")},
+                )
             logger.info(
                 {
                     "event": "sync_write",
@@ -262,7 +281,14 @@ class WatchdogService:
         library = self.backloggery.library(self.config.backloggery_username)
         mapping = self.store.get_mapping(state.ra_game_id)
         existing = self.backloggery.game(mapping) if mapping is not None else None
-        plan = build_plan(state, platforms, library, mapping, existing)
+        field_overrides = None
+        if mapping is not None and existing is not None and state.region is not None:
+            field_overrides = self.store.reconcile_field_overrides(
+                state.ra_game_id,
+                {"title": existing.get("title"), "region": existing.get("region")},
+                {"title": state.title, "region": REGION_CODES[state.region]},
+            )
+        plan = build_plan(state, platforms, library, mapping, existing, field_overrides)
         logger.info(
             {
                 "event": "sync_plan",
@@ -272,7 +298,7 @@ class WatchdogService:
             }
         )
         if not self.config.dry_run:
-            plan = self._apply_live_plan(state, platforms, plan)
+            plan = self._apply_live_plan(state, platforms, plan, field_overrides)
         watch = self.store.observe(
             state.ra_game_id,
             state.fingerprint,
