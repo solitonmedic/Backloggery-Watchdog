@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -27,10 +29,36 @@ def test_ra_invalid_json_is_upstream_error():
         client.profile()
 
 
-def test_backloggery_client_has_no_write_methods():
-    assert not hasattr(BackloggeryClient, "add_game")
-    assert not hasattr(BackloggeryClient, "update_game")
-    assert not hasattr(BackloggeryClient, "add_platform")
+def test_backloggery_writes_are_disabled_by_default():
+    client = BackloggeryClient("session", "token")
+    with pytest.raises(UpstreamError, match="unauthorized endpoint"):
+        client.add_game({"title": "Game"})
+
+
+@respx.mock
+def test_live_add_uses_regular_save_and_returns_entry_id():
+    route = respx.post("https://backloggery.com/api/add_game.php").mock(
+        return_value=httpx.Response(200, json={"msg": "", "payload": "123"})
+    )
+    client = BackloggeryClient("session", "token", allow_writes=True)
+    assert client.add_game({"title": "Game"}) == 123
+    body = json.loads(route.calls[0].request.content)
+    assert body["is_stealth"] is False
+    assert body["update_parent"] is False
+    assert body["priority"] == 40
+
+
+@respx.mock
+def test_live_update_posts_preserved_full_object_with_previous_values():
+    route = respx.post("https://backloggery.com/api/update_game.php").mock(
+        return_value=httpx.Response(200, json={"status": 1, "payload": [{"last_update": "now"}]})
+    )
+    client = BackloggeryClient("session", "token", allow_writes=True)
+    client.update_game({"game_inst_id": 123, "status": 30, "prev_status": 20, "own": 1, "review": "keep"})
+    body = json.loads(route.calls[0].request.content)
+    assert body["prev_status"] == 20
+    assert body["review"] == "keep"
+    assert body["is_stealth"] is False
 
 
 @respx.mock

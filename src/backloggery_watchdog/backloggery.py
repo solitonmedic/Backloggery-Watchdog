@@ -10,14 +10,14 @@ BACKLOGGERY_BASE = "https://backloggery.com"
 
 
 class BackloggeryClient:
-    """Read-only connector for the endpoints used by the current frontend."""
-
     def __init__(
         self,
         php_session_id: str,
         log_token: str,
+        allow_writes: bool = False,
         transport: httpx.BaseTransport | None = None,
     ):
+        self.allow_writes = allow_writes
         self.client = httpx.Client(
             base_url=BACKLOGGERY_BASE,
             timeout=20,
@@ -30,12 +30,14 @@ class BackloggeryClient:
         self.client.close()
 
     def _post(self, endpoint: str, body: dict[str, Any]) -> Any:
-        if endpoint not in {
+        read_endpoints = {
             "/api/fetch_user_platforms.php",
             "/api/fetch_library.php",
             "/api/fetch_gameinfo.php",
-        }:
-            raise UpstreamError("Backloggery connector rejected a non-read endpoint")
+        }
+        write_endpoints = {"/api/add_game.php", "/api/update_game.php"}
+        if endpoint not in read_endpoints and not (self.allow_writes and endpoint in write_endpoints):
+            raise UpstreamError("Backloggery connector rejected an unauthorized endpoint")
         try:
             response = self.client.post(endpoint, json=body)
         except httpx.HTTPError as exc:
@@ -49,11 +51,7 @@ class BackloggeryClient:
             data = response.json()
         except ValueError as exc:
             raise AuthenticationError("Backloggery session returned a non-JSON response") from exc
-        if (
-            endpoint != "/api/fetch_gameinfo.php"
-            and isinstance(data, dict)
-            and data.get("status") in {0, False}
-        ):
+        if endpoint in {"/api/fetch_user_platforms.php", "/api/fetch_library.php"} and isinstance(data, dict) and data.get("status") in {0, False}:
             raise AuthenticationError("Backloggery session was rejected")
         return data
 
@@ -82,3 +80,27 @@ class BackloggeryClient:
             if isinstance(payload, dict):
                 return payload
         return None
+
+    def add_game(self, payload: dict[str, Any]) -> int:
+        body = dict(payload)
+        body.update({"is_stealth": False, "update_parent": False})
+        body.setdefault("priority", 40)
+        body.setdefault("notes", "")
+        data = self._post("/api/add_game.php", body)
+        try:
+            entry_id = int(data.get("payload")) if isinstance(data, dict) else 0
+        except (TypeError, ValueError):
+            entry_id = 0
+        if entry_id < 1:
+            raise UpstreamError("Backloggery did not return a new entry ID")
+        return entry_id
+
+    def update_game(self, payload: dict[str, Any]) -> None:
+        body = dict(payload)
+        body.setdefault("prev_status", payload.get("status"))
+        body.setdefault("prev_own", payload.get("own"))
+        body["is_stealth"] = False
+        body["update_parent"] = bool(payload.get("update_parent", False))
+        data = self._post("/api/update_game.php", body)
+        if not isinstance(data, dict) or data.get("status") not in {1, True}:
+            raise UpstreamError("Backloggery rejected the entry update")

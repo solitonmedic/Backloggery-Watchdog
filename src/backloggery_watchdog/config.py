@@ -45,13 +45,15 @@ class Config:
     online_poll_seconds: int
     offline_stable_polls: int
     log_level: str
+    log_format: str
     dry_run: bool
 
     @classmethod
     def from_env(cls) -> "Config":
         dry_run = _bool("WATCHDOG_DRY_RUN", True)
-        if not dry_run:
-            raise ConfigurationError("this release requires WATCHDOG_DRY_RUN=true")
+        log_format = os.environ.get("WATCHDOG_LOG_FORMAT", "plain").strip().lower()
+        if log_format not in {"plain", "json"}:
+            raise ConfigurationError("WATCHDOG_LOG_FORMAT must be plain or json")
         return cls(
             ra_api_key=_required("RA_API_KEY"),
             php_session_id=_required("PHPSESSID"),
@@ -63,5 +65,6 @@ class Config:
             online_poll_seconds=_positive_int("WATCHDOG_ONLINE_POLL_SECONDS", 60),
             offline_stable_polls=_positive_int("WATCHDOG_OFFLINE_STABLE_POLLS", 3),
             log_level=os.environ.get("WATCHDOG_LOG_LEVEL", "INFO").upper(),
+            log_format=log_format,
             dry_run=dry_run,
         )

@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         config = Config.from_env()
-        configure_logging(config.log_level)
+        configure_logging(config.log_level, config.log_format)
         store = StateStore(config.database_path)
         if args.command == "healthcheck":
             return _health(store, config)
@@ -76,7 +76,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         ra = RetroAchievementsClient(config.ra_api_key, config.ra_username)
-        backloggery = BackloggeryClient(config.php_session_id, config.log_token)
+        backloggery = BackloggeryClient(
+            config.php_session_id,
+            config.log_token,
+            allow_writes=not config.dry_run,
+        )
         try:
             if args.command == "auth-check":
                 profile = ra.profile()
