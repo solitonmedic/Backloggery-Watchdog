@@ -5,20 +5,100 @@ from typing import Any
 from .models import GameState, SyncPlan
 
 PLATFORM_MAP = {
-    "PlayStation 2": "PlayStation 2",
-    "Dreamcast": "Dreamcast",
-    "Nintendo DS": "Nintendo DS",
+    # Active RetroAchievements gaming systems whose names exactly match a
+    # Backloggery catalog title.
     "Nintendo 64": "Nintendo 64",
     "Game Boy": "Game Boy",
-    "Game Boy Color": "Game Boy Color",
     "Game Boy Advance": "Game Boy Advance",
-    "Nintendo GameCube": "Nintendo GameCube",
+    "Game Boy Color": "Game Boy Color",
+    "Sega CD": "Sega CD",
+    "PlayStation": "PlayStation",
+    "Atari Lynx": "Atari Lynx",
+    "Neo Geo Pocket": "Neo Geo Pocket",
+    "Atari Jaguar": "Atari Jaguar",
+    "Nintendo DS": "Nintendo DS",
+    "Wii": "Wii",
+    "PlayStation 2": "PlayStation 2",
+    "Dreamcast": "Dreamcast",
+    "Magnavox Odyssey 2": "Magnavox Odyssey 2",
+    "Atari 2600": "Atari 2600",
+    "Arcade": "Arcade",
+    "Virtual Boy": "Virtual Boy",
+    "MSX": "MSX",
+    "Amstrad CPC": "Amstrad CPC",
+    "Apple II": "Apple II",
     "PlayStation Portable": "PlayStation Portable",
+    "3DO Interactive Multiplayer": "3DO Interactive Multiplayer",
+    "ColecoVision": "ColecoVision",
+    "Intellivision": "Intellivision",
+    "Vectrex": "Vectrex",
+    "PC-FX": "PC-FX",
+    "Atari 7800": "Atari 7800",
+    "WonderSwan": "WonderSwan",
+    "Neo Geo CD": "Neo Geo CD",
+    "Fairchild Channel F": "Fairchild Channel F",
+    "Watara Supervision": "Watara Supervision",
+    "Arduboy": "Arduboy",
+    "WASM-4": "WASM-4",
+    "Interton VC 4000": "Interton VC 4000",
+    "Elektor TV Games Computer": "Elektor TV Games Computer",
+    "Atari Jaguar CD": "Atari Jaguar CD",
+    "Nintendo DSi": "Nintendo DSi",
+    "Uzebox": "Uzebox",
+    # Explicit RA-name to catalog-title aliases.
+    "32X": "Sega 32X",
+    "Master System": "Sega Master System",
+    "Game Gear": "Sega Game Gear",
+    "GameCube": "Nintendo GameCube",
+    "Pokemon Mini": "Pokémon Mini",
+    "SG-1000": "Sega SG-1000",
+    "Saturn": "Sega Saturn",
+    "Arcadia 2001": "Emerson Arcadia 2001",
+    "Famicom Disk System": "Nintendo Famicom Disk System",
+    "PC-8000/8800": "PC-8801",
+    "Mega Duck": "Cougar Boy",
+    "Standalone": "PC",
+    # Previously configured systems remain supported even though they were
+    # not in the active-system response checked for this mapping expansion.
     "PlayStation Vita": "PlayStation Vita",
     "Nintendo 3DS": "Nintendo 3DS",
-    "Wii": "Wii",
     "Wii U": "Wii U",
 }
+
+REGIONAL_PLATFORM_MAP = {
+    "Genesis/Mega Drive": {
+        "North America": "Sega Genesis",
+        "Japan": "Sega Mega Drive",
+        "PAL": "Sega Mega Drive",
+    },
+    "SNES/Super Famicom": {
+        "North America": "Super Nintendo Entertainment System",
+        "Japan": "Super Famicom",
+        "PAL": "Super Nintendo Entertainment System",
+    },
+    "NES/Famicom": {
+        "North America": "Nintendo Entertainment System",
+        "Japan": "Nintendo Family Computer",
+        "PAL": "Nintendo Entertainment System",
+    },
+    "PC Engine/TurboGrafx-16": {
+        "North America": "TurboGrafx-16",
+        "Japan": "PC Engine",
+        "PAL": "PC Engine",
+    },
+    "PC Engine CD/TurboGrafx-CD": {
+        "North America": "TurboGrafx-CD",
+        "Japan": "PC Engine CD",
+        "PAL": "PC Engine CD",
+    },
+}
+
+
+def resolve_platform_title(console: str, region: str | None) -> str | None:
+    regional = REGIONAL_PLATFORM_MAP.get(console)
+    if regional is not None:
+        return regional.get(region) if region is not None else None
+    return PLATFORM_MAP.get(console)
 
 STATUS_CODES = {"Unplayed": 10, "Unfinished": 20, "Beaten": 30, "Completed": 40}
 STATUS_NAMES = {value: key for key, value in STATUS_CODES.items()}
@@ -38,7 +118,7 @@ def _id(item: dict[str, Any], *names: str) -> int | None:
 
 
 def _platform(state: GameState, platforms: list[dict[str, Any]]) -> dict[str, Any] | None:
-    wanted = PLATFORM_MAP.get(state.console)
+    wanted = resolve_platform_title(state.console, state.region)
     if not wanted:
         return None
     return next((item for item in platforms if item.get("title") == wanted), None)

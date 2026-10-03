@@ -1,5 +1,10 @@
 from backloggery_watchdog.models import GameState
-from backloggery_watchdog.planner import build_plan
+from backloggery_watchdog.planner import (
+    PLATFORM_MAP,
+    REGIONAL_PLATFORM_MAP,
+    build_plan,
+    resolve_platform_title,
+)
 
 
 def state(**changes):
@@ -22,10 +27,71 @@ def state(**changes):
 
 PLATFORMS = [{"platform_id": 132, "title": "PlayStation 2", "abbr": "PS2"}]
 
+ACTIVE_RA_SYSTEMS = {
+    "Nintendo 64", "Game Boy", "Game Boy Advance", "Game Boy Color", "Sega CD",
+    "PlayStation", "Atari Lynx", "Neo Geo Pocket", "Atari Jaguar", "Nintendo DS",
+    "Wii", "PlayStation 2", "Magnavox Odyssey 2", "Atari 2600", "Arcade",
+    "Virtual Boy", "MSX", "Amstrad CPC", "Apple II", "Dreamcast",
+    "PlayStation Portable", "3DO Interactive Multiplayer", "ColecoVision",
+    "Intellivision", "Vectrex", "PC-FX", "Atari 7800", "WonderSwan", "Neo Geo CD",
+    "Fairchild Channel F", "Watara Supervision", "Arduboy", "WASM-4", "Interton VC 4000",
+    "Elektor TV Games Computer", "Atari Jaguar CD", "Nintendo DSi", "Uzebox",
+    "Genesis/Mega Drive", "SNES/Super Famicom", "NES/Famicom",
+    "PC Engine/TurboGrafx-16", "32X", "Master System", "Game Gear", "GameCube",
+    "Pokemon Mini", "SG-1000", "Saturn", "PC-8000/8800", "Mega Duck", "Arcadia 2001",
+    "PC Engine CD/TurboGrafx-CD", "Famicom Disk System", "Standalone",
+}
+
+
+def test_every_active_ra_system_has_an_explicit_mapping():
+    assert len(ACTIVE_RA_SYSTEMS) == 55
+    assert ACTIVE_RA_SYSTEMS == set(PLATFORM_MAP) - {"PlayStation Vita", "Nintendo 3DS", "Wii U"} | set(REGIONAL_PLATFORM_MAP)
+    for console in ACTIVE_RA_SYSTEMS:
+        assert resolve_platform_title(console, "North America") is not None
+
 
 def test_missing_platform_and_region_are_blocked():
     assert build_plan(state(console="Dreamcast"), PLATFORMS, [], None, None).action == "blocked"
     assert build_plan(state(region=None), PLATFORMS, [], None, None).action == "blocked"
+
+
+def test_regional_console_platforms_follow_derived_region():
+    expected = {
+        "Genesis/Mega Drive": ("Sega Genesis", "Sega Mega Drive", "Sega Mega Drive"),
+        "SNES/Super Famicom": (
+            "Super Nintendo Entertainment System", "Super Famicom", "Super Nintendo Entertainment System"
+        ),
+        "NES/Famicom": (
+            "Nintendo Entertainment System", "Nintendo Family Computer", "Nintendo Entertainment System"
+        ),
+        "PC Engine/TurboGrafx-16": ("TurboGrafx-16", "PC Engine", "PC Engine"),
+        "PC Engine CD/TurboGrafx-CD": ("TurboGrafx-CD", "PC Engine CD", "PC Engine CD"),
+    }
+    regions = ("North America", "Japan", "PAL")
+    for console, titles in expected.items():
+        assert REGIONAL_PLATFORM_MAP[console] == dict(zip(regions, titles, strict=True))
+        assert tuple(resolve_platform_title(console, region) for region in regions) == titles
+        assert resolve_platform_title(console, None) is None
+        assert resolve_platform_title(console, "Asia") is None
+
+
+def test_approved_fixed_platform_aliases():
+    expected = {
+        "32X": "Sega 32X",
+        "Master System": "Sega Master System",
+        "Game Gear": "Sega Game Gear",
+        "GameCube": "Nintendo GameCube",
+        "Pokemon Mini": "Pokémon Mini",
+        "SG-1000": "Sega SG-1000",
+        "Saturn": "Sega Saturn",
+        "Arcadia 2001": "Emerson Arcadia 2001",
+        "Famicom Disk System": "Nintendo Famicom Disk System",
+        "PC-8000/8800": "PC-8801",
+        "Mega Duck": "Cougar Boy",
+        "Standalone": "PC",
+    }
+    assert {name: PLATFORM_MAP[name] for name in expected} == expected
+    assert resolve_platform_title("Unmapped RA System", "North America") is None
 
 
 def test_exact_candidate_is_not_automatically_mapped():
