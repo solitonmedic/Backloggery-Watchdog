@@ -51,6 +51,7 @@ class Config:
     stealth_save: bool = False
     steam_scan_seconds: int = 900
     steam_presence_seconds: int = 60
+    steam_auto_submit_active: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -71,6 +72,7 @@ class Config:
             priority_decay_days=_positive_int("WATCHDOG_PRIORITY_DECAY_DAYS", 14),
             steam_scan_seconds=_positive_int("WATCHDOG_STEAM_SCAN_SECONDS", 900),
             steam_presence_seconds=_positive_int("WATCHDOG_STEAM_PRESENCE_SECONDS", 60),
+            steam_auto_submit_active=_bool("WATCHDOG_STEAM_AUTO_SUBMIT_ACTIVE", False),
             stealth_save=_bool("WATCHDOG_STEALTH_SAVE", False),
             log_level=os.environ.get("WATCHDOG_LOG_LEVEL", "INFO").upper(),
             log_format=log_format,
