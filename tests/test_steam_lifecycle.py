@@ -14,6 +14,7 @@ class FakeSteam:
     def __init__(self, recent=25, active_app_id=None):
         self.recent = recent
         self.active_app_id = active_app_id
+        self.earned = 2
 
     def currently_playing(self):
         return self.active_app_id
@@ -23,6 +24,16 @@ class FakeSteam:
 
     def recently_played(self):
         return [{"appid": 42, "playtime_2weeks": self.recent} ] if self.recent else []
+
+    def player_achievements(self, _app_id):
+        return [
+            {"name": "Latest Achievement", "achieved": 1, "unlocktime": 100},
+            {
+                "name": "Other Achievement",
+                "achieved": int(self.earned >= 2),
+                "unlocktime": 50 if self.earned >= 2 else 0,
+            },
+        ]
 
 
 class FakeBackloggery:
@@ -71,8 +82,71 @@ def test_steam_scan_completes_mastered_game_without_claiming_live_presence(tmp_p
     service._steam_scan()
     assert backloggery.row["status"] == 40
     assert backloggery.row["priority"] == 40
-    assert backloggery.row["notes"] == "keep these notes"
+    assert backloggery.row["notes"] == (
+        "**Recent playtime:** *25 minutes*\n"
+        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent achievements:** *Latest Achievement*, *Other Achievement*"
+    )
+    assert backloggery.row["achieve_score"] == 2
+    assert backloggery.row["achieve_total"] == 2
     assert len(backloggery.updates) == 1
+    store.close()
+
+
+def test_steam_scan_refreshes_notes_and_achievement_counts_when_playtime_changes(tmp_path):
+    store, backloggery, service = _setup(tmp_path)
+    service.steam.recent = 30
+    service.steam.earned = 1
+
+    service._steam_scan()
+
+    assert backloggery.row["notes"] == (
+        "**Recent playtime:** *30 minutes*\n"
+        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent achievements:** *Latest Achievement*"
+    )
+    assert backloggery.row["achieve_score"] == 1
+    assert backloggery.row["achieve_total"] == 2
+    assert len(backloggery.updates) == 1
+    store.close()
+
+
+def test_steam_scan_refreshes_achievements_for_games_with_recent_playtime(tmp_path):
+    store, backloggery, service = _setup(tmp_path)
+    service.steam.earned = 1
+
+    service._steam_scan()
+
+    assert backloggery.row["achieve_score"] == 1
+    assert backloggery.row["achieve_total"] == 2
+    assert backloggery.row["notes"] == (
+        "**Recent playtime:** *25 minutes*\n"
+        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent achievements:** *Latest Achievement*"
+    )
+    store.close()
+
+
+def test_steam_scan_skips_backloggery_write_when_managed_fields_match(tmp_path):
+    store, backloggery, service = _setup(tmp_path)
+    notes = (
+        "**Recent playtime:** *25 minutes*\n"
+        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent achievements:** *Latest Achievement*, *Other Achievement*"
+    )
+    store.set_steam_candidate_details(42, notes, ["Latest Achievement", "Other Achievement"], "available", 2, 2)
+    backloggery.row.update(
+        {
+            "status": 40,
+            "notes": notes,
+            "achieve_score": 2,
+            "achieve_total": 2,
+        }
+    )
+
+    service._steam_scan()
+
+    assert backloggery.updates == []
     store.close()
 
 
@@ -128,4 +202,6 @@ def test_steam_scan_dry_run_does_not_write_backloggery(tmp_path):
     service._steam_scan()
     assert backloggery.updates == []
     assert backloggery.row["status"] == 10
+    assert backloggery.row["notes"] == "keep these notes"
+    assert "achieve_score" not in backloggery.row
     store.close()

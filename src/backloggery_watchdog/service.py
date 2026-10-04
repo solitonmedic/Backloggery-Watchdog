@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -464,7 +465,7 @@ class WatchdogService:
         return CycleResult(plan, watch.active, watch.stable_polls)
 
     def _steam_scan(self) -> None:
-        """Refresh library playtime and completion status for linked PC entries."""
+        """Refresh playtime, achievement counts, Notes, and status for linked PC entries."""
         if self.steam is None:
             return
         prior = {
@@ -481,12 +482,29 @@ class WatchdogService:
             if entry_id is None:
                 continue
             previous = prior.get(app_id)
-            playtime_changed = previous is None or (
-                int(previous.get("playtime_forever") or 0) != int(candidate.get("playtime_forever") or 0)
+            recent_minutes = int(candidate.get("playtime_recent") or 0)
+            lifetime_minutes = int(candidate.get("playtime_forever") or 0)
+            playtime_changed = previous is None or any(
+                int(previous.get(field) or 0) != current
+                for field, current in (
+                    ("playtime_forever", lifetime_minutes),
+                    ("playtime_recent", recent_minutes),
+                )
             )
             earned = candidate.get("achievements_earned")
             total = candidate.get("achievements_total")
-            if playtime_changed or earned is None or total is None:
+            achievement_status = str(candidate.get("achievement_status") or "unavailable")
+            raw_achievements = candidate.get("achievements_json")
+            try:
+                achievements = json.loads(str(raw_achievements)) if raw_achievements else []
+            except (TypeError, ValueError):
+                achievements = []
+            if not isinstance(achievements, list) or not all(
+                isinstance(name, str) for name in achievements
+            ):
+                achievements = []
+            cached_achievements = list(achievements)
+            if playtime_changed or recent_minutes > 0 or earned is None or total is None:
                 try:
                     stats = self.steam.player_achievements(app_id)
                 except UpstreamError:
@@ -494,18 +512,22 @@ class WatchdogService:
                 else:
                     achievements = latest_unlocked_achievements(stats)
                     earned, total = achievement_counts(stats)
-                    self.store.set_steam_candidate_details(
-                        app_id,
-                        format_steam_notes(
-                            int(candidate.get("playtime_recent") or 0),
-                            int(candidate.get("playtime_forever") or 0),
-                            achievements,
-                        ),
-                        achievements,
-                        "available",
-                        earned,
-                        total,
-                    )
+                    achievement_status = "available"
+            notes = format_steam_notes(
+                recent_minutes,
+                lifetime_minutes,
+                achievements if achievement_status == "available" else None,
+            )
+            if (
+                notes != candidate.get("notes")
+                or achievements != cached_achievements
+                or earned != candidate.get("achievements_earned")
+                or total != candidate.get("achievements_total")
+                or achievement_status != candidate.get("achievement_status")
+            ):
+                self.store.set_steam_candidate_details(
+                    app_id, notes, achievements, achievement_status, earned, total
+                )
             mastered = earned is not None and total is not None and int(total) > 0 and int(earned) >= int(total)
             tracking = self.store.steam_priority_tracking(app_id)
             if tracking is not None:
@@ -539,20 +561,51 @@ class WatchdogService:
             payload = dict(latest)
             payload["game_inst_id"] = int(entry_id)
             changed = False
+            changed_fields: list[str] = []
             if desired_status is not None:
                 current_status = int(latest.get("status", 0) or 0)
                 status = 40 if mastered else max(current_status, desired_status)
                 if status != current_status:
                     payload["status"] = status
                     changed = True
+                    changed_fields.append("status")
+            if str(latest.get("notes") or "") != notes:
+                payload["notes"] = notes
+                changed = True
+                changed_fields.append("notes")
+            if earned is not None and total is not None:
+                for field, desired in (("achieve_score", int(earned)), ("achieve_total", int(total))):
+                    try:
+                        current = int(latest.get(field))
+                    except (TypeError, ValueError):
+                        current = None
+                    if current != desired:
+                        payload[field] = desired
+                        changed = True
+                        changed_fields.append(field)
             if changed:
                 if not self.config.dry_run:
                     payload["prev_status"] = latest.get("status")
                     payload["prev_own"] = latest.get("own")
                     try:
                         self.backloggery.update_game(payload)
-                        if self.backloggery.game(int(entry_id)) is None:
+                        confirmed = self.backloggery.game(int(entry_id))
+                        if confirmed is None:
                             raise UpstreamError("Backloggery Steam entry update could not be verified")
+                        if str(confirmed.get("notes") or "") != notes:
+                            raise UpstreamError("Backloggery Steam Notes update could not be verified")
+                        if earned is not None and total is not None:
+                            try:
+                                confirmed_earned = int(confirmed.get("achieve_score"))
+                                confirmed_total = int(confirmed.get("achieve_total"))
+                            except (TypeError, ValueError) as exc:
+                                raise UpstreamError(
+                                    "Backloggery Steam achievement counts could not be verified"
+                                ) from exc
+                            if confirmed_earned != int(earned) or confirmed_total != int(total):
+                                raise UpstreamError(
+                                    "Backloggery Steam achievement counts did not reach the requested values"
+                                )
                     except UpstreamError as exc:
                         logger.warning({
                             "event": "steam_sync_skipped",
@@ -561,6 +614,13 @@ class WatchdogService:
                         })
                         continue
                 changed_entries += 1
+                logger.info({
+                    "event": "steam_entry_updated" if not self.config.dry_run else "steam_entry_update_planned",
+                    "appid": app_id,
+                    "backloggery_entry_id": int(entry_id),
+                    "changed_fields": changed_fields,
+                    "dry_run": self.config.dry_run,
+                })
         logger.info({
             "event": "steam_scan_complete",
             "owned": len(games),
