@@ -14,7 +14,7 @@ from .planner import REGION_CODES, STATUS_NAMES, build_plan, resolve_platform_ti
 from .ra import RetroAchievementsClient, normalize_game_state
 from .state import StateStore
 from .steam import SteamClient, achievement_counts, format_steam_notes, latest_unlocked_achievements
-from .steam_submit import submit_steam_candidate
+from .steam_submit import DIGITAL_FORMAT, submit_steam_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -478,6 +478,12 @@ class WatchdogService:
         self.store.save_steam_candidates(games, recent_games)
         self.store.refresh_steam_inferred_family_playtime(recent_games)
         changed_entries = 0
+        digital_format_attempts = 0
+        pc_platform_ids = {
+            int(item["platform_id"])
+            for item in self.backloggery.platforms()
+            if str(item.get("title", "")).casefold() == "pc"
+        }
         for candidate in self.store.list_steam_candidates(limit=100000):
             app_id = int(candidate["steam_appid"])
             entry_id = candidate.get("backloggery_game_inst_id")
@@ -566,6 +572,10 @@ class WatchdogService:
             if latest is None:
                 logger.warning({"event": "steam_sync_skipped", "appid": app_id, "reason": "linked entry not found"})
                 continue
+            is_pc = int(latest.get("platform_id") or 0) in pc_platform_ids
+            if not is_pc:
+                logger.warning({"event": "steam_sync_skipped", "appid": app_id, "reason": "linked entry is not PC"})
+                continue
             payload = dict(latest)
             payload["game_inst_id"] = int(entry_id)
             changed = False
@@ -581,6 +591,15 @@ class WatchdogService:
                 payload["notes"] = notes
                 changed = True
                 changed_fields.append("notes")
+            try:
+                current_format = int(latest["phys_digi"])
+            except (KeyError, TypeError, ValueError):
+                current_format = None
+            if current_format is not None and current_format != DIGITAL_FORMAT and digital_format_attempts < 10:
+                payload["phys_digi"] = DIGITAL_FORMAT
+                changed = True
+                changed_fields.append("format")
+                digital_format_attempts += 1
             if earned is not None and total is not None:
                 for field, desired in (("achieve_score", int(earned)), ("achieve_total", int(total))):
                     try:
@@ -602,6 +621,8 @@ class WatchdogService:
                             raise UpstreamError("Backloggery Steam entry update could not be verified")
                         if str(confirmed.get("notes") or "") != notes:
                             raise UpstreamError("Backloggery Steam Notes update could not be verified")
+                        if "format" in changed_fields and int(confirmed.get("phys_digi") or 0) != DIGITAL_FORMAT:
+                            raise UpstreamError("Backloggery Steam Digital format update could not be verified")
                         if earned is not None and total is not None:
                             try:
                                 confirmed_earned = int(confirmed.get("achieve_score"))
