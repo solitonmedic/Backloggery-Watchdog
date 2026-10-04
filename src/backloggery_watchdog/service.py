@@ -615,14 +615,21 @@ class WatchdogService:
                     payload["prev_status"] = latest.get("status")
                     payload["prev_own"] = latest.get("own")
                     try:
-                        self.backloggery.update_game(payload)
+                        update_error: UpstreamError | None = None
+                        try:
+                            self.backloggery.update_game(payload)
+                        except UpstreamError as exc:
+                            # The destination may commit before sending an error.
+                            update_error = exc
                         confirmed = self.backloggery.game(int(entry_id))
                         if confirmed is None:
-                            raise UpstreamError("Backloggery Steam entry update could not be verified")
+                            raise update_error or UpstreamError("Backloggery Steam entry update could not be verified")
                         if str(confirmed.get("notes") or "") != notes:
-                            raise UpstreamError("Backloggery Steam Notes update could not be verified")
+                            raise update_error or UpstreamError("Backloggery Steam Notes update could not be verified")
                         if "format" in changed_fields and int(confirmed.get("phys_digi") or 0) != DIGITAL_FORMAT:
-                            raise UpstreamError("Backloggery Steam Digital format update could not be verified")
+                            raise update_error or UpstreamError("Backloggery Steam Digital format update could not be verified")
+                        if "status" in changed_fields and int(confirmed.get("status") or 0) != int(payload["status"]):
+                            raise update_error or UpstreamError("Backloggery Steam status update could not be verified")
                         if earned is not None and total is not None:
                             try:
                                 confirmed_earned = int(confirmed.get("achieve_score"))
@@ -632,9 +639,14 @@ class WatchdogService:
                                     "Backloggery Steam achievement counts could not be verified"
                                 ) from exc
                             if confirmed_earned != int(earned) or confirmed_total != int(total):
-                                raise UpstreamError(
-                                    "Backloggery Steam achievement counts did not reach the requested values"
-                                )
+                                raise update_error or UpstreamError("Backloggery Steam achievement counts did not reach the requested values")
+                        if update_error is not None:
+                            logger.warning({
+                                "event": "steam_update_readback_confirmed",
+                                "appid": app_id,
+                                "backloggery_entry_id": int(entry_id),
+                                "response_error": str(update_error),
+                            })
                     except UpstreamError as exc:
                         logger.warning({
                             "event": "steam_sync_skipped",

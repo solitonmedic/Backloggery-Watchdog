@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .backloggery import BackloggeryClient
@@ -13,6 +14,7 @@ from .steam import (
 )
 
 DIGITAL_FORMAT = 1
+logger = logging.getLogger(__name__)
 
 
 def _set_linked_pc_entry_digital(
@@ -37,10 +39,26 @@ def _set_linked_pc_entry_digital(
     payload["phys_digi"] = DIGITAL_FORMAT
     payload["prev_status"] = latest.get("status")
     payload["prev_own"] = latest.get("own")
-    backloggery.update_game(payload)
+    update_error: UpstreamError | None = None
+    try:
+        backloggery.update_game(payload)
+    except UpstreamError as exc:
+        # Backloggery can apply an update before returning an HTTP error.
+        update_error = exc
     confirmed = backloggery.game(entry_id)
     if confirmed is None or int(confirmed.get("phys_digi") or 0) != DIGITAL_FORMAT:
+        if update_error is not None:
+            raise update_error
         raise UpstreamError(f"Digital format update could not be verified for entry {entry_id}")
+    preserved = ("title", "platform_id", "status", "priority", "own", "notes", "achieve_score", "achieve_total")
+    if any(str(confirmed.get(field)) != str(latest.get(field)) for field in preserved):
+        raise UpstreamError(f"Non-Format fields changed while updating entry {entry_id}")
+    if update_error is not None:
+        logger.warning({
+            "event": "steam_format_update_readback_confirmed",
+            "backloggery_entry_id": entry_id,
+            "response_error": str(update_error),
+        })
     return True
 
 
