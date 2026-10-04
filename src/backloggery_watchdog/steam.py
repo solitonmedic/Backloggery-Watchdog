@@ -37,9 +37,10 @@ class SteamClient:
                 "format": "json",
                 "input_json": json.dumps(params, separators=(",", ":")),
             }
+        endpoint = f"{self.BASE_URL}/{method}/v{version}/"
         try:
             response = self.client.get(
-                f"{self.BASE_URL}/{method}/v{version}/",
+                endpoint,
                 params=request_params,
             )
         except httpx.HTTPError as exc:
@@ -52,7 +53,7 @@ class SteamClient:
         self.request_log.append(
             {
                 "method": "GET",
-                "endpoint": f"{self.BASE_URL}/{method}/v1/",
+                "endpoint": endpoint,
                 "request_params": {
                     **{key: value for key, value in request_params.items() if key != "key"},
                     "key": "[REDACTED]",

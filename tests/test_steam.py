@@ -123,6 +123,7 @@ def test_currently_playing_reads_gameid_from_player_summaries_v2():
         "secret", "76561198000000000", httpx.Client(transport=httpx.MockTransport(handler))
     )
     assert client.currently_playing() == 42
+    assert client.request_log[0]["endpoint"].endswith("ISteamUser/GetPlayerSummaries/v2/")
 
 
 def test_currently_playing_returns_none_when_summary_has_no_active_app():
