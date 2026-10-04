@@ -12,6 +12,7 @@ from .models import GameState, SyncPlan
 from .planner import REGION_CODES, STATUS_NAMES, build_plan, resolve_platform_title
 from .ra import RetroAchievementsClient, normalize_game_state
 from .state import StateStore
+from .steam import SteamClient, achievement_counts, format_steam_notes, latest_unlocked_achievements
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,13 @@ class WatchdogService:
         store: StateStore,
         ra: RetroAchievementsClient,
         backloggery: BackloggeryClient,
+        steam: SteamClient | None = None,
     ):
         self.config = config
         self.store = store
         self.ra = ra
         self.backloggery = backloggery
+        self.steam = steam
 
     @staticmethod
     def _summary(plan: SyncPlan) -> str:
@@ -460,6 +463,238 @@ class WatchdogService:
         self.store.heartbeat(True)
         return CycleResult(plan, watch.active, watch.stable_polls)
 
+    def _steam_scan(self) -> None:
+        """Refresh library playtime and completion status for linked PC entries."""
+        if self.steam is None:
+            return
+        prior = {
+            int(item["steam_appid"]): item
+            for item in self.store.list_steam_candidates(limit=100000)
+        }
+        games = self.steam.owned_games()
+        recent_games = self.steam.recently_played()
+        self.store.save_steam_candidates(games, recent_games)
+        changed_entries = 0
+        for candidate in self.store.list_steam_candidates(limit=100000):
+            app_id = int(candidate["steam_appid"])
+            entry_id = candidate.get("backloggery_game_inst_id")
+            if entry_id is None:
+                continue
+            previous = prior.get(app_id)
+            playtime_changed = previous is None or (
+                int(previous.get("playtime_forever") or 0) != int(candidate.get("playtime_forever") or 0)
+            )
+            earned = candidate.get("achievements_earned")
+            total = candidate.get("achievements_total")
+            if playtime_changed or earned is None or total is None:
+                try:
+                    stats = self.steam.player_achievements(app_id)
+                except UpstreamError:
+                    pass
+                else:
+                    achievements = latest_unlocked_achievements(stats)
+                    earned, total = achievement_counts(stats)
+                    self.store.set_steam_candidate_details(
+                        app_id,
+                        format_steam_notes(
+                            int(candidate.get("playtime_recent") or 0),
+                            int(candidate.get("playtime_forever") or 0),
+                            achievements,
+                        ),
+                        achievements,
+                        "available",
+                        earned,
+                        total,
+                    )
+            mastered = earned is not None and total is not None and int(total) > 0 and int(earned) >= int(total)
+            tracking = self.store.steam_priority_tracking(app_id)
+            if tracking is not None:
+                # Recent playtime is a rolling two-week total. Keep any actual
+                # session lifecycle untouched and only refresh mastery metadata.
+                self.store.set_steam_priority_tracking(
+                    app_id,
+                    bool(tracking["recently_played"]),
+                    str(tracking["inactive_since"]) if tracking.get("inactive_since") else None,
+                    mastered,
+                    active_session=bool(tracking.get("active_session")),
+                    missed_presence_polls=int(tracking.get("missed_presence_polls") or 0),
+                )
+            desired_status: int | None = None
+            if mastered:
+                desired_status = 40
+            elif candidate.get("playtime_forever") is not None:
+                desired_status = 20 if int(candidate.get("playtime_forever") or 0) > 0 else 10
+            try:
+                latest = self.backloggery.game(int(entry_id))
+            except UpstreamError as exc:
+                logger.warning({
+                    "event": "steam_sync_skipped",
+                    "appid": app_id,
+                    "reason": f"Backloggery read failed: {exc}",
+                })
+                continue
+            if latest is None:
+                logger.warning({"event": "steam_sync_skipped", "appid": app_id, "reason": "linked entry not found"})
+                continue
+            payload = dict(latest)
+            payload["game_inst_id"] = int(entry_id)
+            changed = False
+            if desired_status is not None:
+                current_status = int(latest.get("status", 0) or 0)
+                status = 40 if mastered else max(current_status, desired_status)
+                if status != current_status:
+                    payload["status"] = status
+                    changed = True
+            if changed:
+                if not self.config.dry_run:
+                    payload["prev_status"] = latest.get("status")
+                    payload["prev_own"] = latest.get("own")
+                    try:
+                        self.backloggery.update_game(payload)
+                        if self.backloggery.game(int(entry_id)) is None:
+                            raise UpstreamError("Backloggery Steam entry update could not be verified")
+                    except UpstreamError as exc:
+                        logger.warning({
+                            "event": "steam_sync_skipped",
+                            "appid": app_id,
+                            "reason": f"Backloggery update could not be confirmed: {exc}",
+                        })
+                        continue
+                changed_entries += 1
+        logger.info({
+            "event": "steam_scan_complete",
+            "owned": len(games),
+            "recently_played": len(recent_games),
+            "linked_entries_changed": changed_entries,
+        })
+
+    def _steam_presence_poll(self) -> None:
+        """Use Steam's exact active AppID for Now Playing and start decay on session end."""
+        if self.steam is None:
+            return
+        active_app_id = self.steam.currently_playing()
+        now = datetime.now(UTC)
+        candidates = {
+            int(item["steam_appid"]): item
+            for item in self.store.list_steam_candidates(limit=100000)
+            if item.get("backloggery_game_inst_id") is not None
+        }
+        tracking_ids = {
+            int(row["steam_appid"])
+            for app_id in candidates
+            if (row := self.store.steam_priority_tracking(app_id)) is not None
+        }
+        if active_app_id in candidates:
+            tracking_ids.add(active_app_id)
+
+        interval = timedelta(days=self.config.priority_decay_days)
+        for app_id in sorted(tracking_ids):
+            candidate = candidates[app_id]
+            entry_id = int(candidate["backloggery_game_inst_id"])
+            tracking = self.store.steam_priority_tracking(app_id)
+            candidate_earned = candidate.get("achievements_earned")
+            candidate_total = candidate.get("achievements_total")
+            mastered = (
+                int(candidate_total) > 0 and int(candidate_earned) >= int(candidate_total)
+                if candidate_earned is not None and candidate_total is not None
+                else bool(tracking["mastered"]) if tracking else False
+            )
+            is_active = app_id == active_app_id
+            missed = int(tracking.get("missed_presence_polls") or 0) if tracking else 0
+            inactive_since = tracking.get("inactive_since") if tracking else None
+
+            if is_active:
+                confirmed_active = True
+                missed = 0
+                inactive_since = None
+            elif tracking and bool(tracking.get("active_session")):
+                missed += 1
+                confirmed_active = missed < 2
+                if confirmed_active:
+                    inactive_since = None
+                else:
+                    inactive_since = now.isoformat()
+            else:
+                confirmed_active = False
+                # Migrate legacy tracking from rolling recent playtime: decay
+                # begins now rather than treating that window as live presence.
+                if tracking and bool(tracking.get("recently_played")) and not inactive_since:
+                    inactive_since = now.isoformat()
+                missed = 0
+
+            self.store.set_steam_priority_tracking(
+                app_id,
+                False,
+                str(inactive_since) if inactive_since else None,
+                mastered,
+                active_session=confirmed_active,
+                missed_presence_polls=missed,
+            )
+
+            desired_priority: int | None = PRIORITY_NOW_PLAYING if confirmed_active else None
+            reason = "Steam player summary reports this AppID as active"
+            if not confirmed_active and inactive_since:
+                elapsed = now - datetime.fromisoformat(str(inactive_since)).astimezone(UTC)
+                if elapsed >= interval * 2 and mastered:
+                    desired_priority = PRIORITY_NORMAL
+                    reason = "mastered game returns to Normal after two inactive intervals"
+                elif elapsed >= interval * 3:
+                    desired_priority = PRIORITY_LOW
+                    reason = "Steam session ended three priority intervals ago"
+                elif elapsed >= interval * 2:
+                    desired_priority = PRIORITY_HIGH
+                    reason = "Steam session ended two priority intervals ago"
+                elif elapsed >= interval:
+                    desired_priority = PRIORITY_PAUSED
+                    reason = "Steam session ended one priority interval ago"
+            if desired_priority is None:
+                continue
+
+            latest = self.backloggery.game(entry_id)
+            if latest is None:
+                logger.warning({"event": "steam_presence_skipped", "appid": app_id,
+                                "reason": "linked Backloggery entry not found"})
+                continue
+            try:
+                current_priority = int(latest.get("priority", PRIORITY_NORMAL))
+            except (TypeError, ValueError):
+                current_priority = PRIORITY_NORMAL
+            if current_priority == desired_priority:
+                continue
+            if not confirmed_active and current_priority not in {
+                PRIORITY_NOW_PLAYING, PRIORITY_PAUSED, PRIORITY_HIGH,
+                PRIORITY_NORMAL, PRIORITY_LOW,
+            }:
+                # Preserve manually selected Ongoing, Replay, and Shelved priorities.
+                continue
+            event = {
+                "event": "steam_priority_plan",
+                "dry_run": self.config.dry_run,
+                "appid": app_id,
+                "backloggery_entry_id": entry_id,
+                "title": latest.get("title"),
+                "from": PRIORITY_NAMES.get(current_priority, str(current_priority)),
+                "to": PRIORITY_NAMES[desired_priority],
+                "reason": reason,
+            }
+            if self.config.dry_run:
+                logger.info(event)
+                continue
+            payload = dict(latest)
+            payload["priority"] = desired_priority
+            payload["prev_status"] = latest.get("status")
+            payload["prev_own"] = latest.get("own")
+            self.backloggery.update_game(payload)
+            confirmed = self.backloggery.game(entry_id)
+            try:
+                confirmed_priority = int(confirmed.get("priority", -1)) if confirmed else -1
+            except (TypeError, ValueError):
+                confirmed_priority = -1
+            if confirmed_priority != desired_priority:
+                raise UpstreamError("Backloggery Steam priority update could not be verified")
+            event["event"] = "steam_priority_updated"
+            logger.info(event)
+
     def run(self) -> None:
         logger.info(
             {
@@ -468,8 +703,12 @@ class WatchdogService:
                 "offline_poll_seconds": self.config.offline_poll_seconds,
                 "online_poll_seconds": self.config.online_poll_seconds,
                 "priority_decay_days": self.config.priority_decay_days,
+                "steam_scan_seconds": self.config.steam_scan_seconds if self.steam else None,
+                "steam_presence_seconds": self.config.steam_presence_seconds if self.steam else None,
             }
         )
+        last_steam_scan = 0.0
+        last_steam_presence = 0.0
         while True:
             try:
                 result = self.cycle()
@@ -482,4 +721,33 @@ class WatchdogService:
                 self.store.heartbeat(False, "upstream")
                 logger.error({"event": "cycle_degraded", "code": "upstream", "message": str(exc)})
                 delay = self.config.offline_poll_seconds
+            if (
+                self.steam is not None
+                and time.monotonic() - last_steam_presence >= self.config.steam_presence_seconds
+            ):
+                try:
+                    self._steam_presence_poll()
+                except AuthenticationError as exc:
+                    logger.error({"event": "steam_presence_degraded", "code": "authentication", "message": str(exc)})
+                except UpstreamError as exc:
+                    logger.error({"event": "steam_presence_degraded", "code": "upstream", "message": str(exc)})
+                last_steam_presence = time.monotonic()
+            if self.steam is not None and time.monotonic() - last_steam_scan >= self.config.steam_scan_seconds:
+                try:
+                    self._steam_scan()
+                except AuthenticationError as exc:
+                    logger.error({"event": "steam_scan_degraded", "code": "authentication", "message": str(exc)})
+                except UpstreamError as exc:
+                    logger.error({"event": "steam_scan_degraded", "code": "upstream", "message": str(exc)})
+                last_steam_scan = time.monotonic()
+            if self.steam is not None:
+                until_presence = max(
+                    1,
+                    self.config.steam_presence_seconds - (time.monotonic() - last_steam_presence),
+                )
+                until_scan = max(
+                    1,
+                    self.config.steam_scan_seconds - (time.monotonic() - last_steam_scan),
+                )
+                delay = min(delay, until_presence, until_scan)
             time.sleep(delay)

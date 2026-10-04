@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import email.utils
+import os
+import time
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+
+from fcntl import LOCK_EX, LOCK_UN, flock
 
 import httpx
 
@@ -17,9 +25,11 @@ class BackloggeryClient:
         allow_writes: bool = False,
         transport: httpx.BaseTransport | None = None,
         stealth_save: bool = False,
+        shared_rate_limit_path: str | None = None,
     ):
         self.allow_writes = allow_writes
         self.stealth_save = stealth_save
+        self.shared_rate_limit_path = shared_rate_limit_path
         self.client = httpx.Client(
             base_url=BACKLOGGERY_BASE,
             timeout=20,
@@ -27,6 +37,44 @@ class BackloggeryClient:
             headers={"Accept": "application/json", "Content-Type": "application/json"},
             transport=transport,
         )
+        self._last_request_at: float | None = None
+
+    @contextmanager
+    def _shared_request_lock(self):
+        if self.shared_rate_limit_path is None:
+            yield None
+            return
+        path = Path(self.shared_rate_limit_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        os.fchmod(fd, 0o600)
+        try:
+            flock(fd, LOCK_EX)
+            yield fd
+        finally:
+            flock(fd, LOCK_UN)
+            os.close(fd)
+
+    def _wait_for_request_slot(self, shared_fd: int | None) -> None:
+        if shared_fd is None:
+            if self._last_request_at is not None:
+                elapsed = time.monotonic() - self._last_request_at
+                if elapsed < 1.1:
+                    time.sleep(1.1 - elapsed)
+            return
+        os.lseek(shared_fd, 0, os.SEEK_SET)
+        raw = os.read(shared_fd, 64).decode("ascii", errors="ignore").strip()
+        try:
+            last_request_at = float(raw)
+        except ValueError:
+            last_request_at = 0.0
+        wait = 1.1 - (time.time() - last_request_at)
+        if wait > 0:
+            time.sleep(wait)
+        os.lseek(shared_fd, 0, os.SEEK_SET)
+        os.ftruncate(shared_fd, 0)
+        os.write(shared_fd, str(time.time()).encode("ascii"))
+        os.fsync(shared_fd)
 
     def close(self) -> None:
         self.client.close()
@@ -45,10 +93,30 @@ class BackloggeryClient:
         }
         if endpoint not in read_endpoints and not (self.allow_writes and endpoint in write_endpoints):
             raise UpstreamError("Backloggery connector rejected an unauthorized endpoint")
-        try:
-            response = self.client.post(endpoint, json=body)
-        except httpx.HTTPError as exc:
-            raise UpstreamError("Backloggery request failed") from exc
+        response = None
+        with self._shared_request_lock() as shared_fd:
+            for attempt in range(4):
+                self._wait_for_request_slot(shared_fd)
+                try:
+                    response = self.client.post(endpoint, json=body)
+                except httpx.HTTPError as exc:
+                    raise UpstreamError("Backloggery request failed") from exc
+                self._last_request_at = time.monotonic()
+                if response.status_code != 429 or attempt == 3:
+                    break
+                retry_after = response.headers.get("retry-after", "")
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    try:
+                        retry_at = email.utils.parsedate_to_datetime(retry_after)
+                        if retry_at.tzinfo is None:
+                            retry_at = retry_at.replace(tzinfo=UTC)
+                        delay = (retry_at - datetime.now(UTC)).total_seconds()
+                    except (TypeError, ValueError, OverflowError):
+                        delay = 5.0 * (2**attempt)
+                time.sleep(max(1.1, min(delay, 60.0)))
+        assert response is not None
         content_type = response.headers.get("content-type", "").lower()
         if response.status_code in {401, 403} or "text/html" in content_type and response.text.lstrip().startswith("<"):
             raise AuthenticationError("Backloggery session has expired")
