@@ -124,8 +124,8 @@ def test_steam_scan_completes_mastered_game_without_claiming_live_presence(tmp_p
     assert backloggery.row["status"] == 40
     assert backloggery.row["priority"] == 40
     assert backloggery.row["notes"] == (
-        "**Recent playtime:** *25 minutes*\n"
-        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent playtime:** *0 hours and 25 minutes*\n"
+        "**Lifetime playtime:** *8 hours and 20 minutes*\n"
         "**Recent achievements:** *Latest Achievement*, *Other Achievement*"
     )
     assert backloggery.row["achieve_score"] == 2
@@ -142,8 +142,8 @@ def test_steam_scan_refreshes_notes_and_achievement_counts_when_playtime_changes
     service._steam_scan()
 
     assert backloggery.row["notes"] == (
-        "**Recent playtime:** *30 minutes*\n"
-        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent playtime:** *0 hours and 30 minutes*\n"
+        "**Lifetime playtime:** *8 hours and 20 minutes*\n"
         "**Recent achievements:** *Latest Achievement*"
     )
     assert backloggery.row["achieve_score"] == 1
@@ -161,8 +161,8 @@ def test_steam_scan_refreshes_achievements_for_games_with_recent_playtime(tmp_pa
     assert backloggery.row["achieve_score"] == 1
     assert backloggery.row["achieve_total"] == 2
     assert backloggery.row["notes"] == (
-        "**Recent playtime:** *25 minutes*\n"
-        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent playtime:** *0 hours and 25 minutes*\n"
+        "**Lifetime playtime:** *8 hours and 20 minutes*\n"
         "**Recent achievements:** *Latest Achievement*"
     )
     store.close()
@@ -171,8 +171,8 @@ def test_steam_scan_refreshes_achievements_for_games_with_recent_playtime(tmp_pa
 def test_steam_scan_skips_backloggery_write_when_managed_fields_match(tmp_path):
     store, backloggery, service = _setup(tmp_path)
     notes = (
-        "**Recent playtime:** *25 minutes*\n"
-        "**Lifetime playtime:** *500 minutes*\n"
+        "**Recent playtime:** *0 hours and 25 minutes*\n"
+        "**Lifetime playtime:** *8 hours and 20 minutes*\n"
         "**Recent achievements:** *Latest Achievement*, *Other Achievement*"
     )
     store.set_steam_candidate_details(42, notes, ["Latest Achievement", "Other Achievement"], "available", 2, 2)

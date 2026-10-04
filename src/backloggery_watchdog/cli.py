@@ -19,7 +19,7 @@ from .steam import (
     format_steam_notes,
     latest_unlocked_achievements,
 )
-from .steam_submit import reconcile_steam_digital_format, submit_accepted_steam_candidates
+from .steam_submit import reconcile_steam_digital_format, reconcile_steam_playtime_hours, submit_accepted_steam_candidates
 from .state import StateStore
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,9 @@ def _parser() -> argparse.ArgumentParser:
     steam_format = steam_commands.add_parser("format-digital")
     steam_format.add_argument("--limit", type=int, default=20)
     steam_format.add_argument("--dry-run", action="store_true")
+    steam_hours = steam_commands.add_parser("notes-hours")
+    steam_hours.add_argument("--limit", type=int, default=20)
+    steam_hours.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -146,6 +149,30 @@ def _steam_command(args: argparse.Namespace) -> int:
             )
             try:
                 result = reconcile_steam_digital_format(
+                    store,
+                    backloggery,
+                    config.backloggery_username,
+                    limit=args.limit,
+                    dry_run=dry_run,
+                )
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
+            finally:
+                backloggery.close()
+        if args.steam_command == "notes-hours":
+            if args.limit < 1:
+                raise WatchdogError("notes-hours limit must be greater than zero")
+            config = Config.from_env()
+            dry_run = config.dry_run or args.dry_run
+            backloggery = BackloggeryClient(
+                config.php_session_id,
+                config.log_token,
+                allow_writes=not dry_run,
+                stealth_save=config.stealth_save,
+                shared_rate_limit_path=f"{config.database_path}.backloggery.lock",
+            )
+            try:
+                result = reconcile_steam_playtime_hours(
                     store,
                     backloggery,
                     config.backloggery_username,
