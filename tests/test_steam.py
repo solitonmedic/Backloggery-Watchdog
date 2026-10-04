@@ -108,3 +108,33 @@ def test_player_achievements_reads_v1_endpoint():
 
     client = SteamClient("secret", "76561198000000000", httpx.Client(transport=httpx.MockTransport(handler)))
     assert client.player_achievements(42) == []
+
+
+def test_currently_playing_reads_gameid_from_player_summaries_v2():
+    def handler(request):
+        assert request.url.path.endswith("ISteamUser/GetPlayerSummaries/v2/")
+        assert request.url.params["steamids"] == "76561198000000000"
+        return httpx.Response(
+            200,
+            json={"response": {"players": [{"gameid": "42", "gameextrainfo": "Game"}]}},
+        )
+
+    client = SteamClient(
+        "secret", "76561198000000000", httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    assert client.currently_playing() == 42
+
+
+def test_currently_playing_returns_none_when_summary_has_no_active_app():
+    client = SteamClient(
+        "secret",
+        "76561198000000000",
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, json={"response": {"players": [{"personastate": 1}]}}
+                )
+            )
+        ),
+    )
+    assert client.currently_playing() is None
