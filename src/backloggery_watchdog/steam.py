@@ -138,6 +138,31 @@ class SteamClient:
             raise UpstreamError("Steam recently-played response contained malformed game data")
         return games
 
+    def public_game(self, app_id: int) -> dict[str, Any] | None:
+        """Resolve one exact AppID in Valve's public game catalog."""
+        app_id = int(app_id)
+        if app_id < 1 or app_id > 0xFFFFFFFF:
+            return None
+        data = self._request(
+            "IStoreService/GetAppList",
+            {"last_appid": app_id - 1, "max_results": 1, "include_games": True},
+            service_interface=True,
+        )
+        response = data.get("response")
+        apps = response.get("apps") if isinstance(response, dict) else None
+        if not isinstance(apps, list):
+            raise UpstreamError("Steam public game catalog response was malformed")
+        if not apps or not isinstance(apps[0], dict):
+            return None
+        game = apps[0]
+        try:
+            catalog_app_id = int(game.get("appid") or 0)
+        except (TypeError, ValueError) as exc:
+            raise UpstreamError("Steam public game catalog returned an invalid AppID") from exc
+        if catalog_app_id != app_id or not str(game.get("name") or "").strip():
+            return None
+        return game
+
     def currently_playing(self) -> int | None:
         """Return the active AppID reported in the player's public summary, if any."""
         data = self._request(

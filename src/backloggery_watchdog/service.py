@@ -476,6 +476,7 @@ class WatchdogService:
         games = self.steam.owned_games()
         recent_games = self.steam.recently_played()
         self.store.save_steam_candidates(games, recent_games)
+        self.store.refresh_steam_inferred_family_playtime(recent_games)
         changed_entries = 0
         for candidate in self.store.list_steam_candidates(limit=100000):
             app_id = int(candidate["steam_appid"])
@@ -759,7 +760,7 @@ class WatchdogService:
             logger.info(event)
 
     def _steam_auto_submit_active_game(self, app_id: int) -> None:
-        """Submit an active, officially owned Steam game unless review excluded it."""
+        """Submit an active catalog game unless a saved review excludes it."""
         if self.steam is None:
             return
         candidate = self.store.get_steam_candidate(app_id)
@@ -772,11 +773,21 @@ class WatchdogService:
                 return
 
         games = self.steam.owned_games()
-        if not any(int(game["appid"]) == app_id for game in games):
-            logger.debug({"event": "steam_active_game_not_owned", "appid": app_id})
+        is_owned = any(int(game["appid"]) == app_id for game in games)
+        if not is_owned and candidate is not None and candidate.get("access_source") != "family_inferred":
+            logger.debug({"event": "steam_active_game_no_longer_owned", "appid": app_id})
             return
+        if not is_owned and candidate is None:
+            game = self.steam.public_game(app_id)
+            if game is None:
+                logger.debug({"event": "steam_active_game_not_in_catalog", "appid": app_id})
+                return
         recent_games = self.steam.recently_played()
         self.store.save_steam_candidates(games, recent_games)
+        if not is_owned and candidate is None:
+            self.store.save_steam_inferred_family_candidate(
+                app_id, str(game["name"]), recent_games
+            )
         candidate = self.store.get_steam_candidate(app_id)
         if candidate is None:
             return
@@ -795,11 +806,13 @@ class WatchdogService:
             self.steam,
             app_id,
             self.config.backloggery_username,
+            active_session=True,
         )
         logger.info({
             "event": "steam_active_game_submitted",
             "appid": app_id,
             "action": result["action"],
+            "access_source": candidate["access_source"],
             "backloggery_entry_id": result["game_inst_id"],
         })
 

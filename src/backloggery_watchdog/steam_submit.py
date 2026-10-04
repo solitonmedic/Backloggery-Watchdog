@@ -48,6 +48,8 @@ def submit_steam_candidate(
     steam: SteamClient,
     app_id: int,
     username: str,
+    *,
+    active_session: bool = False,
 ) -> dict[str, Any]:
     candidate = store.get_steam_candidate(app_id)
     if candidate is None:
@@ -83,7 +85,7 @@ def submit_steam_candidate(
     status = 10  # Unplayed
     if earned is not None and total is not None and total > 0 and earned >= total:
         status = 40  # Completed
-    elif lifetime_minutes > 0:
+    elif lifetime_minutes > 0 or active_session:
         status = 20  # Unfinished
 
     platform = _pc_platform(backloggery)
@@ -111,10 +113,10 @@ def submit_steam_candidate(
         "abbr": platform.get("abbr", "PC"),
         "status": status,
         "phys_digi": 20,  # Physical is the project default for newly added entries.
-        "own": 1,
+        "own": 5 if candidate.get("access_source") == "family_inferred" else 1,
         "region": 1,  # Region is not inferred from a Steam package.
         "notes": notes,
-        "priority": 80 if recent_minutes > 0 else 40,
+        "priority": 80 if recent_minutes > 0 or active_session else 40,
     }
     if earned is not None and total is not None:
         payload["achieve_score"] = earned
