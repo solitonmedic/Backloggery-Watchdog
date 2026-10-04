@@ -506,7 +506,14 @@ class WatchdogService:
             ):
                 achievements = []
             cached_achievements = list(achievements)
-            if playtime_changed or recent_minutes > 0 or earned is None or total is None:
+            tracking = self.store.steam_priority_tracking(app_id)
+            if (
+                playtime_changed
+                or recent_minutes > 0
+                or earned is None
+                or total is None
+                or bool(tracking and tracking.get("active_session"))
+            ):
                 try:
                     stats = self.steam.player_achievements(app_id)
                 except UpstreamError:
@@ -531,7 +538,6 @@ class WatchdogService:
                     app_id, notes, achievements, achievement_status, earned, total
                 )
             mastered = earned is not None and total is not None and int(total) > 0 and int(earned) >= int(total)
-            tracking = self.store.steam_priority_tracking(app_id)
             if tracking is not None:
                 # Recent playtime is a rolling two-week total. Keep any actual
                 # session lifecycle untouched and only refresh mastery metadata.
