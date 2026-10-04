@@ -63,6 +63,7 @@ class StateStore:
                 playtime_forever INTEGER NOT NULL DEFAULT 0,
                 playtime_recent INTEGER NOT NULL DEFAULT 0,
                 owned INTEGER NOT NULL DEFAULT 1,
+                access_source TEXT NOT NULL DEFAULT 'owned_api',
                 first_seen_at TEXT NOT NULL,
                 last_seen_in_sync TEXT NOT NULL,
                 review_status TEXT NOT NULL DEFAULT 'unreviewed',
@@ -99,6 +100,7 @@ class StateStore:
             ("review_notes", "TEXT"),
             ("backloggery_game_inst_id", "INTEGER"),
             ("submitted_at", "TEXT"),
+            ("access_source", "TEXT NOT NULL DEFAULT 'owned_api'"),
         ):
             if column not in existing_candidate_columns:
                 self.db.execute(f"ALTER TABLE steam_candidates ADD COLUMN {column} {definition}")
@@ -395,24 +397,68 @@ class StateStore:
                 changed_count += 1
             self.db.execute(
                 """INSERT INTO steam_candidates
-                   (steam_appid, steam_name, playtime_forever, playtime_recent, owned, first_seen_at, last_seen_in_sync)
-                   VALUES (?, ?, ?, ?, 1, ?, ?)
+                   (steam_appid, steam_name, playtime_forever, playtime_recent, owned, access_source, first_seen_at, last_seen_in_sync)
+                   VALUES (?, ?, ?, ?, 1, 'owned_api', ?, ?)
                    ON CONFLICT(steam_appid) DO UPDATE SET
                      steam_name=excluded.steam_name,
                      playtime_forever=excluded.playtime_forever,
                      playtime_recent=excluded.playtime_recent,
                      owned=1,
+                     access_source='owned_api',
                      last_seen_in_sync=excluded.last_seen_in_sync""",
                 (appid, name, lifetime, recent, now, now),
             )
         self.db.commit()
         return {"new": new_count, "changed": changed_count, "seen": len(games)}
 
+    def save_steam_inferred_family_candidate(
+        self, app_id: int, name: str, recently_played: list[dict[str, object]]
+    ) -> None:
+        """Save a catalog-verified active game without claiming license ownership."""
+        recent = next(
+            (item for item in recently_played if int(item["appid"]) == app_id), None
+        )
+        minutes_recent = int(recent.get("playtime_2weeks", 0) or 0) if recent else 0
+        minutes_lifetime = int(recent.get("playtime_forever", 0) or 0) if recent else 0
+        now = utc_now()
+        self.db.execute(
+            """INSERT INTO steam_candidates
+               (steam_appid, steam_name, playtime_forever, playtime_recent, owned,
+                access_source, first_seen_at, last_seen_in_sync)
+               VALUES (?, ?, ?, ?, 0, 'family_inferred', ?, ?)
+               ON CONFLICT(steam_appid) DO UPDATE SET
+                 playtime_forever=MAX(steam_candidates.playtime_forever, excluded.playtime_forever),
+                 playtime_recent=excluded.playtime_recent,
+                 last_seen_in_sync=excluded.last_seen_in_sync""",
+            (app_id, name, minutes_lifetime, minutes_recent, now, now),
+        )
+        self.db.commit()
+
+    def refresh_steam_inferred_family_playtime(
+        self, recently_played: list[dict[str, object]]
+    ) -> None:
+        recent = {int(item["appid"]): item for item in recently_played}
+        for row in self.db.execute(
+            "SELECT steam_appid, playtime_forever FROM steam_candidates WHERE access_source='family_inferred'"
+        ).fetchall():
+            app_id = int(row["steam_appid"])
+            item = recent.get(app_id)
+            lifetime = max(
+                int(row["playtime_forever"]),
+                int(item.get("playtime_forever", 0) or 0) if item else 0,
+            )
+            minutes_recent = int(item.get("playtime_2weeks", 0) or 0) if item else 0
+            self.db.execute(
+                "UPDATE steam_candidates SET playtime_forever=?, playtime_recent=? WHERE steam_appid=?",
+                (lifetime, minutes_recent, app_id),
+            )
+        self.db.commit()
+
     def list_steam_candidates(
         self, limit: int = 20, status: str | None = None
     ) -> list[dict[str, object]]:
         query = """SELECT c.steam_appid, c.steam_name, c.playtime_forever, c.playtime_recent,
-                          c.owned, c.first_seen_at, c.last_seen_in_sync, c.review_status,
+                          c.owned, c.access_source, c.first_seen_at, c.last_seen_in_sync, c.review_status,
                           c.canonical_title, c.platform, c.subsystem, c.review_notes,
                           c.backloggery_game_inst_id, c.submitted_at,
                           d.notes, d.achievements_json, d.achievement_status,
@@ -431,7 +477,7 @@ class StateStore:
     def get_steam_candidate(self, app_id: int) -> dict[str, object] | None:
         row = self.db.execute(
             """SELECT c.steam_appid, c.steam_name, c.playtime_forever, c.playtime_recent,
-                      c.owned, c.first_seen_at, c.last_seen_in_sync, c.review_status,
+                      c.owned, c.access_source, c.first_seen_at, c.last_seen_in_sync, c.review_status,
                       c.canonical_title, c.platform, c.subsystem, c.review_notes,
                       c.backloggery_game_inst_id, c.submitted_at,
                       d.notes, d.achievements_json, d.achievement_status,
