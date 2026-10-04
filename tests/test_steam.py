@@ -92,8 +92,8 @@ def test_achievement_counts_counts_unlocked_and_locked_records():
 
 def test_steam_notes_use_requested_markdown_and_empty_states():
     assert format_steam_notes(424, 831, ["A", "B"]) == (
-        "**Recent playtime:** *424 minutes*\n"
-        "**Lifetime playtime:** *831 minutes*\n"
+        "**Recent playtime:** *7 hours and 4 minutes*\n"
+        "**Lifetime playtime:** *13 hours and 51 minutes*\n"
         "**Recent achievements:** *A*, *B*"
     )
     assert "*None recorded*" in format_steam_notes(0, 0, [])

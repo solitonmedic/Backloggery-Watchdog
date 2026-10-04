@@ -13,7 +13,7 @@ from .models import GameState, SyncPlan
 from .planner import REGION_CODES, STATUS_NAMES, build_plan, resolve_platform_title
 from .ra import RetroAchievementsClient, normalize_game_state
 from .state import StateStore
-from .steam import SteamClient, achievement_counts, format_steam_notes, latest_unlocked_achievements
+from .steam import SteamClient, achievement_counts, format_steam_notes, latest_unlocked_achievements, reformat_legacy_steam_notes
 from .steam_submit import DIGITAL_FORMAT, submit_steam_candidate
 
 logger = logging.getLogger(__name__)
@@ -479,6 +479,7 @@ class WatchdogService:
         self.store.refresh_steam_inferred_family_playtime(recent_games)
         changed_entries = 0
         digital_format_attempts = 0
+        playtime_reformat_attempts = 0
         pc_platform_ids = {
             int(item["platform_id"])
             for item in self.backloggery.platforms()
@@ -587,10 +588,15 @@ class WatchdogService:
                     payload["status"] = status
                     changed = True
                     changed_fields.append("status")
-            if str(latest.get("notes") or "") != notes:
-                payload["notes"] = notes
-                changed = True
-                changed_fields.append("notes")
+            current_notes = str(latest.get("notes") or "")
+            if current_notes != notes:
+                format_only = reformat_legacy_steam_notes(current_notes) == notes
+                if not format_only or playtime_reformat_attempts < 10:
+                    payload["notes"] = notes
+                    changed = True
+                    changed_fields.append("notes")
+                    if format_only:
+                        playtime_reformat_attempts += 1
             try:
                 current_format = int(latest["phys_digi"])
             except (KeyError, TypeError, ValueError):
@@ -624,7 +630,7 @@ class WatchdogService:
                         confirmed = self.backloggery.game(int(entry_id))
                         if confirmed is None:
                             raise update_error or UpstreamError("Backloggery Steam entry update could not be verified")
-                        if str(confirmed.get("notes") or "") != notes:
+                        if "notes" in changed_fields and str(confirmed.get("notes") or "") != notes:
                             raise update_error or UpstreamError("Backloggery Steam Notes update could not be verified")
                         if "format" in changed_fields and int(confirmed.get("phys_digi") or 0) != DIGITAL_FORMAT:
                             raise update_error or UpstreamError("Backloggery Steam Digital format update could not be verified")

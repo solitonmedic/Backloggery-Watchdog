@@ -230,6 +230,31 @@ def achievement_counts(achievements: list[dict[str, Any]]) -> tuple[int, int]:
     return earned, len(achievements)
 
 
+def format_playtime(minutes_total: int) -> str:
+    hours, minutes = divmod(max(0, int(minutes_total)), 60)
+    hour_unit = "hour" if hours == 1 else "hours"
+    minute_unit = "minute" if minutes == 1 else "minutes"
+    return f"{hours} {hour_unit} and {minutes} {minute_unit}"
+
+
+_LEGACY_PLAYTIME_NOTES = re.compile(
+    r"\A\*\*Recent playtime:\*\* \*(\d+) minutes\*\n"
+    r"\*\*Lifetime playtime:\*\* \*(\d+) minutes\*"
+)
+
+
+def reformat_legacy_steam_notes(notes: str) -> str | None:
+    """Convert only the old minute-only lines, retaining the achievement text."""
+    match = _LEGACY_PLAYTIME_NOTES.match(notes)
+    if match is None:
+        return None
+    return (
+        f"**Recent playtime:** *{format_playtime(int(match[1]))}*\n"
+        f"**Lifetime playtime:** *{format_playtime(int(match[2]))}*"
+        f"{notes[match.end():]}"
+    )
+
+
 def format_steam_notes(
     recent_minutes: int,
     lifetime_minutes: int,
@@ -247,8 +272,8 @@ def format_steam_notes(
     )
     return "\n".join(
         [
-            f"**Recent playtime:** *{int(recent_minutes)} minutes*",
-            f"**Lifetime playtime:** *{int(lifetime_minutes)} minutes*",
+            f"**Recent playtime:** *{format_playtime(recent_minutes)}*",
+            f"**Lifetime playtime:** *{format_playtime(lifetime_minutes)}*",
             f"**Recent achievements:** {achievements}",
         ]
     )

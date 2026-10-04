@@ -93,8 +93,8 @@ def test_submit_adds_approved_candidate_to_registered_pc_with_notes(tmp_path):
     assert payload["achieve_score"] == 1
     assert payload["achieve_total"] == 2
     assert payload["notes"] == (
-        "**Recent playtime:** *424 minutes*\n"
-        "**Lifetime playtime:** *831 minutes*\n"
+        "**Recent playtime:** *7 hours and 4 minutes*\n"
+        "**Lifetime playtime:** *13 hours and 51 minutes*\n"
         "**Recent achievements:** *Unlocked*"
     )
     assert result == {"appid": 42, "action": "created", "game_inst_id": 765}

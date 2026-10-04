@@ -11,6 +11,7 @@ from .steam import (
     achievement_counts,
     format_steam_notes,
     latest_unlocked_achievements,
+    reformat_legacy_steam_notes,
 )
 
 DIGITAL_FORMAT = 1
@@ -56,6 +57,47 @@ def _set_linked_pc_entry_digital(
     if update_error is not None:
         logger.warning({
             "event": "steam_format_update_readback_confirmed",
+            "backloggery_entry_id": entry_id,
+            "response_error": str(update_error),
+        })
+    return True
+
+
+def _set_linked_pc_entry_playtime_hours(
+    backloggery: BackloggeryClient,
+    entry_id: int,
+    platform_id: int,
+    *,
+    dry_run: bool = False,
+) -> bool:
+    latest = backloggery.game(entry_id)
+    if latest is None or int(latest.get("platform_id") or 0) != platform_id:
+        raise UpstreamError(f"linked Steam PC entry {entry_id} changed or disappeared")
+    updated_notes = reformat_legacy_steam_notes(str(latest.get("notes") or ""))
+    if updated_notes is None:
+        return False
+    if dry_run:
+        return True
+    payload = dict(latest)
+    payload["notes"] = updated_notes
+    payload["prev_status"] = latest.get("status")
+    payload["prev_own"] = latest.get("own")
+    update_error: UpstreamError | None = None
+    try:
+        backloggery.update_game(payload)
+    except UpstreamError as exc:
+        update_error = exc
+    confirmed = backloggery.game(entry_id)
+    if confirmed is None or str(confirmed.get("notes") or "") != updated_notes:
+        if update_error is not None:
+            raise update_error
+        raise UpstreamError(f"Playtime Notes update could not be verified for entry {entry_id}")
+    preserved = ("title", "platform_id", "status", "priority", "own", "phys_digi", "achieve_score", "achieve_total")
+    if any(str(confirmed.get(field)) != str(latest.get(field)) for field in preserved):
+        raise UpstreamError(f"Non-Notes fields changed while updating entry {entry_id}")
+    if update_error is not None:
+        logger.warning({
+            "event": "steam_playtime_notes_readback_confirmed",
             "backloggery_entry_id": entry_id,
             "response_error": str(update_error),
         })
@@ -259,4 +301,50 @@ def reconcile_steam_digital_format(
         "updated" if not dry_run else "planned": updated,
         "already_changed_during_run": already_digital,
         "remaining_estimate": max(0, len(targets) - (updated if not dry_run else 0) - already_digital),
+    }
+
+
+def reconcile_steam_playtime_hours(
+    store: StateStore,
+    backloggery: BackloggeryClient,
+    username: str,
+    *,
+    limit: int = 20,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Reformat only legacy Steam playtime lines in linked PC Notes."""
+    pc_ids = {
+        int(item["platform_id"])
+        for item in backloggery.platforms()
+        if str(item.get("title", "")).casefold() == "pc"
+    }
+    if len(pc_ids) != 1:
+        raise UpstreamError("Backloggery does not have one registered PC platform")
+    pc_id = next(iter(pc_ids))
+    linked_ids = {
+        int(candidate["backloggery_game_inst_id"])
+        for candidate in store.list_steam_candidates(limit=100000)
+        if candidate.get("backloggery_game_inst_id") is not None
+    }
+    targets = sorted(
+        int(row["game_inst_id"])
+        for row in backloggery.library(username)
+        if int(row.get("game_inst_id") or 0) in linked_ids
+        and int(row.get("platform_id") or 0) == pc_id
+        and reformat_legacy_steam_notes(str(row.get("notes") or "")) is not None
+    )
+    updated = already_changed = 0
+    for entry_id in targets[:limit]:
+        if not _set_linked_pc_entry_playtime_hours(
+            backloggery, entry_id, pc_id, dry_run=dry_run
+        ):
+            already_changed += 1
+            continue
+        updated += 1
+    return {
+        "linked_pc_entries": len(linked_ids),
+        "needing_hours": len(targets),
+        "updated" if not dry_run else "planned": updated,
+        "already_changed_during_run": already_changed,
+        "remaining_estimate": max(0, len(targets) - (updated if not dry_run else 0) - already_changed),
     }
