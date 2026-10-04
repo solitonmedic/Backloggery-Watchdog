@@ -14,6 +14,7 @@ from .planner import REGION_CODES, STATUS_NAMES, build_plan, resolve_platform_ti
 from .ra import RetroAchievementsClient, normalize_game_state
 from .state import StateStore
 from .steam import SteamClient, achievement_counts, format_steam_notes, latest_unlocked_achievements
+from .steam_submit import submit_steam_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -633,6 +634,8 @@ class WatchdogService:
         if self.steam is None:
             return
         active_app_id = self.steam.currently_playing()
+        if active_app_id is not None and self.config.steam_auto_submit_active:
+            self._steam_auto_submit_active_game(active_app_id)
         now = datetime.now(UTC)
         candidates = {
             int(item["steam_appid"]): item
@@ -755,6 +758,51 @@ class WatchdogService:
             event["event"] = "steam_priority_updated"
             logger.info(event)
 
+    def _steam_auto_submit_active_game(self, app_id: int) -> None:
+        """Submit an active, officially owned Steam game unless review excluded it."""
+        if self.steam is None:
+            return
+        candidate = self.store.get_steam_candidate(app_id)
+        if candidate is not None:
+            if candidate.get("backloggery_game_inst_id") is not None:
+                return
+            if candidate.get("review_status") in {
+                "discarded", "ignored", "skipped", "already_tracked",
+            }:
+                return
+
+        games = self.steam.owned_games()
+        if not any(int(game["appid"]) == app_id for game in games):
+            logger.debug({"event": "steam_active_game_not_owned", "appid": app_id})
+            return
+        recent_games = self.steam.recently_played()
+        self.store.save_steam_candidates(games, recent_games)
+        candidate = self.store.get_steam_candidate(app_id)
+        if candidate is None:
+            return
+        if self.config.dry_run:
+            logger.info({
+                "event": "steam_active_game_submission_planned",
+                "appid": app_id,
+                "dry_run": True,
+            })
+            return
+        if candidate["review_status"] == "unreviewed":
+            self.store.review_steam_candidate(app_id, "accepted")
+        result = submit_steam_candidate(
+            self.store,
+            self.backloggery,
+            self.steam,
+            app_id,
+            self.config.backloggery_username,
+        )
+        logger.info({
+            "event": "steam_active_game_submitted",
+            "appid": app_id,
+            "action": result["action"],
+            "backloggery_entry_id": result["game_inst_id"],
+        })
+
     def run(self) -> None:
         logger.info(
             {
@@ -765,6 +813,7 @@ class WatchdogService:
                 "priority_decay_days": self.config.priority_decay_days,
                 "steam_scan_seconds": self.config.steam_scan_seconds if self.steam else None,
                 "steam_presence_seconds": self.config.steam_presence_seconds if self.steam else None,
+                "steam_auto_submit_active": self.config.steam_auto_submit_active if self.steam else False,
             }
         )
         last_steam_scan = 0.0
