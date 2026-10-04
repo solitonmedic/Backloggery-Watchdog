@@ -12,6 +12,37 @@ from .steam import (
     latest_unlocked_achievements,
 )
 
+DIGITAL_FORMAT = 1
+
+
+def _set_linked_pc_entry_digital(
+    backloggery: BackloggeryClient,
+    entry_id: int,
+    platform_id: int,
+    *,
+    dry_run: bool = False,
+) -> bool:
+    """Read, preserve, and verify one linked PC entry's Format field."""
+    latest = backloggery.game(entry_id)
+    if latest is None or int(latest.get("platform_id") or 0) != platform_id:
+        raise UpstreamError(f"linked Steam PC entry {entry_id} changed or disappeared")
+    raw_format = latest.get("phys_digi")
+    if raw_format is None:
+        return False
+    if int(raw_format) == DIGITAL_FORMAT:
+        return False
+    if dry_run:
+        return True
+    payload = dict(latest)
+    payload["phys_digi"] = DIGITAL_FORMAT
+    payload["prev_status"] = latest.get("status")
+    payload["prev_own"] = latest.get("own")
+    backloggery.update_game(payload)
+    confirmed = backloggery.game(entry_id)
+    if confirmed is None or int(confirmed.get("phys_digi") or 0) != DIGITAL_FORMAT:
+        raise UpstreamError(f"Digital format update could not be verified for entry {entry_id}")
+    return True
+
 
 def _pc_platform(backloggery: BackloggeryClient) -> dict[str, Any]:
     platforms = backloggery.platforms()
@@ -103,6 +134,7 @@ def submit_steam_candidate(
         existing_id = int(matches[0].get("game_inst_id") or matches[0].get("id") or 0)
         if existing_id < 1:
             raise UpstreamError("matching PC Backloggery entry had no stable entry ID")
+        _set_linked_pc_entry_digital(backloggery, existing_id, platform_id)
         store.set_steam_candidate_backloggery_link(app_id, existing_id)
         return {"appid": app_id, "action": "linked_existing", "game_inst_id": existing_id}
 
@@ -112,7 +144,7 @@ def submit_steam_candidate(
         "platform_title": "PC",
         "abbr": platform.get("abbr", "PC"),
         "status": status,
-        "phys_digi": 20,  # Physical is the project default for newly added entries.
+        "phys_digi": DIGITAL_FORMAT,
         "own": 5 if candidate.get("access_source") == "family_inferred" else 1,
         "region": 1,  # Region is not inferred from a Steam package.
         "notes": notes,
@@ -128,8 +160,9 @@ def submit_steam_candidate(
     if (
         int(created.get("platform_id", 0) or 0) != platform_id
         or str(created.get("title", "")).casefold() != title.casefold()
+        or int(created.get("phys_digi", 0) or 0) != DIGITAL_FORMAT
     ):
-        raise UpstreamError("Backloggery created a Steam entry with unexpected title or platform")
+        raise UpstreamError("Backloggery created a Steam entry with unexpected title, platform, or format")
     store.set_steam_candidate_backloggery_link(app_id, game_inst_id)
     return {"appid": app_id, "action": "created", "game_inst_id": game_inst_id}
 
@@ -160,3 +193,52 @@ def submit_accepted_steam_candidates(
             submit_steam_candidate(store, backloggery, steam, int(candidate["steam_appid"]), username)
         )
     return results
+
+
+def reconcile_steam_digital_format(
+    store: StateStore,
+    backloggery: BackloggeryClient,
+    username: str,
+    *,
+    limit: int = 20,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Change only the format of linked Steam PC entries, in bounded batches."""
+    platforms = backloggery.platforms()
+    pc_ids = {
+        int(item["platform_id"])
+        for item in platforms
+        if str(item.get("title", "")).casefold() == "pc"
+    }
+    if len(pc_ids) != 1:
+        raise UpstreamError("Backloggery does not have one registered PC platform")
+    pc_id = next(iter(pc_ids))
+    linked_ids = {
+        int(candidate["backloggery_game_inst_id"])
+        for candidate in store.list_steam_candidates(limit=100000)
+        if candidate.get("backloggery_game_inst_id") is not None
+    }
+    library = backloggery.library(username)
+    targets = sorted(
+        int(row["game_inst_id"])
+        for row in library
+        if int(row.get("game_inst_id") or 0) in linked_ids
+        and int(row.get("platform_id") or 0) == pc_id
+        and row.get("phys_digi") is not None
+        and int(row["phys_digi"]) != DIGITAL_FORMAT
+    )
+    updated = already_digital = 0
+    for entry_id in targets[:limit]:
+        if not _set_linked_pc_entry_digital(
+            backloggery, entry_id, pc_id, dry_run=dry_run
+        ):
+            already_digital += 1
+            continue
+        updated += 1
+    return {
+        "linked_pc_entries": len(linked_ids),
+        "needing_digital": len(targets),
+        "updated" if not dry_run else "planned": updated,
+        "already_changed_during_run": already_digital,
+        "remaining_estimate": max(0, len(targets) - (updated if not dry_run else 0) - already_digital),
+    }
