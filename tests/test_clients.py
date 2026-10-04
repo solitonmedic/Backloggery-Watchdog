@@ -134,3 +134,46 @@ def test_missing_mapped_game_is_not_misreported_as_expired_session():
     )
     client = BackloggeryClient("session", "token")
     assert client.game(999) is None
+
+
+def test_backloggery_client_retries_rate_limit(monkeypatch):
+    calls = []
+    delays = []
+
+    def handler(_request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"payload": []})
+
+    monkeypatch.setattr("backloggery_watchdog.backloggery.time.sleep", delays.append)
+    client = BackloggeryClient(
+        "session", "token", transport=httpx.MockTransport(handler)
+    )
+    assert client.platforms() == []
+    assert len(calls) == 2
+    assert sum(delays) >= 1.1
+
+
+def test_backloggery_clients_share_request_spacing_across_process_clients(tmp_path, monkeypatch):
+    delays = []
+    monkeypatch.setattr("backloggery_watchdog.backloggery.time.sleep", delays.append)
+    lock_path = str(tmp_path / "backloggery.lock")
+    first = BackloggeryClient(
+        "session",
+        "token",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"payload": []})),
+        shared_rate_limit_path=lock_path,
+    )
+    second = BackloggeryClient(
+        "session",
+        "token",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"payload": []})),
+        shared_rate_limit_path=lock_path,
+    )
+    first.platforms()
+    second.platforms()
+    assert sum(delays) >= 1.0
+    assert (tmp_path / "backloggery.lock").stat().st_mode & 0o777 == 0o600
+    first.close()
+    second.close()
