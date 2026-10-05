@@ -1,3 +1,6 @@
+<img width="1571" height="1564" alt="image" src="https://github.com/user-attachments/assets/8c1d0f82-b291-469a-b305-18147ef81a46" />
+
+
 # Backloggery Watchdog
 
 Backloggery Watchdog keeps your RetroAchievements activity and selected Steam data in sync with your Backloggery collection. It runs in Docker and saves its mappings, Steam review choices, and sync history in a local SQLite database.
