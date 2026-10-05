@@ -10,7 +10,9 @@ The connector watches the newest game in your RetroAchievements Recently Played 
 
 It syncs achievement progress, game status, platform, and region. It copies Rich Presence into Notes when the message belongs to that same game. RA's win condition determines whether a game is Beaten; RA mastery determines whether it is Completed. It won't infer either status from achievement names or Rich Presence text.
 
-When RA reports that you're online, the connector watches that game more often. It waits for several stable offline checks before ending the watch. Priority aging applies to games it has seen online. It leaves Priority alone for games it has never watched and doesn't lower a game's status just because you've been away.
+When RA reports that you're online, the connector watches that game more often. For a mapped game, Priority stays `Now Playing` while RA reports Online and through the offline confirmation window. It waits for several stable offline checks before ending the watch. Priority aging applies only to mapped games it has seen online. It leaves Priority alone for games it has never watched and doesn't lower a game's status just because you've been away.
+
+The default aging interval is 14 days (`WATCHDOG_PRIORITY_DECAY_DAYS`). For RA, the timer starts when the offline watch is confirmed. If the tracked game's Last Played value, Rich Presence, or achievement progress changes, the timer starts over. After 14 days, Priority becomes `Paused`; after 28 days, `High`; after 42 days, `Low`. A mastered game returns to `Normal` after 28 days.
 
 The connector saves RA Game ID to Backloggery entry ID mappings in its database. You can inspect or change them with the `mapping` commands below. It sets new RA entries to Ownership `Own` and Format `Physical`, and preserves Backloggery fields it doesn't manage.
 
@@ -24,7 +26,7 @@ For Steam games linked to PC entries, it refreshes playtime, achievement counts,
 
 Steam entries use Format `Digital`. Games in your owned-games list use Ownership `Own`. If you're playing an official Steam game that isn't in that list, the connector can recognize it through the public Steam catalog and mark it `Household`, which covers games available through Steam Families. It ignores non-Steam shortcuts.
 
-The connector checks Steam presence every minute by default. When Steam reports an exact active AppID and that game is linked to a Backloggery PC entry, it can set Priority to `Now Playing`. Two missed checks end the active signal. After that, Priority moves through `Paused`, `High`, and `Low` at the configured interval. A mastered game returns to `Normal` after two intervals. Priorities outside that sequence are left alone.
+The connector checks Steam presence every minute by default. When Steam reports an exact active AppID and that game is linked to a Backloggery PC entry, it sets Priority to `Now Playing`. Two missed checks end the active signal and start the decay timer. With the default 14-day interval, Priority becomes `Paused` after 14 inactive days, `High` after 28 days, and `Low` after 42 days. A mastered game returns to `Normal` after 28 days. If Steam reports the game active again, the timer resets. While a game is inactive, the connector leaves priorities outside this sequence alone.
 
 You can turn on automatic submission for an active official Steam game with `WATCHDOG_STEAM_AUTO_SUBMIT_ACTIVE=true`. This also covers an eligible Steam Families game. It won't auto-submit candidates you've discarded, ignored, skipped, or marked as already tracked. Automatic active-game submission is off by default.
 
