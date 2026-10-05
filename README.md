@@ -73,14 +73,7 @@ Set `STEAM_ID` to your 17-digit SteamID64 or Steam profile URL. Vanity URLs such
 
 ## Run it with Docker Compose
 
-Clone either repository and enter the checkout:
-
-```sh
-git clone https://github.com/solitonmedic/Backloggery-Watchdog.git
-cd Backloggery-Watchdog
-```
-
-Or use the GitHub mirror if you have access:
+Clone the GitHub repository and enter the checkout:
 
 ```sh
 git clone https://github.com/solitonmedic/Backloggery-Watchdog.git
@@ -131,27 +124,27 @@ Your database stays in the host's `data/` directory. Keep that directory to reta
 
 ## Settings
 
-| Setting | Needed? | Default | What it controls |
-| --- | --- | --- | --- |
-| `RA_API_KEY` | Yes | n/a | RetroAchievements Web API key. |
-| `RA_USERNAME` | Yes | n/a | RetroAchievements username. |
-| `PHPSESSID` | Yes | n/a | Backloggery session cookie. |
-| `log_token` | Yes | n/a | Backloggery session token cookie. |
-| `BACKLOGGERY_USERNAME` | Yes | n/a | Backloggery account to update. |
-| `STEAM_WEB_API` | For Steam | Empty | Steam Web API key. |
-| `STEAM_ID` | For Steam | Empty | SteamID64 or profile URL. |
-| `WATCHDOG_DRY_RUN` | No | `true` | When true, the connector reads data and reports planned changes without writing to Backloggery. |
-| `WATCHDOG_STEALTH_SAVE` | No | `false` | Turns on Backloggery Stealth Save behavior. |
-| `WATCHDOG_DATABASE_PATH` | No | `/data/watchdog.db` | SQLite database location. Keep it under `/data` so the Docker mount preserves it. |
-| `WATCHDOG_OFFLINE_POLL_SECONDS` | No | `900` | How often to check RA while offline. |
-| `WATCHDOG_ONLINE_POLL_SECONDS` | No | `60` | How often to check RA while online. |
-| `WATCHDOG_OFFLINE_STABLE_POLLS` | No | `3` | Stable offline checks before ending an RA active watch. |
-| `WATCHDOG_PRIORITY_DECAY_DAYS` | No | `14` | Days between Steam or RA Priority changes. |
-| `WATCHDOG_STEAM_SCAN_SECONDS` | No | `900` | How often to scan the Steam library and linked entries. |
-| `WATCHDOG_STEAM_PRESENCE_SECONDS` | No | `60` | How often to check Steam's active game. |
-| `WATCHDOG_STEAM_AUTO_SUBMIT_ACTIVE` | No | `false` | Adds an eligible active Steam game automatically. Requires Steam settings and `WATCHDOG_DRY_RUN=false`. |
-| `WATCHDOG_LOG_LEVEL` | No | `INFO` | Log verbosity. |
-| `WATCHDOG_LOG_FORMAT` | No | `plain` | Use `plain` or `json` logs. |
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `RA_API_KEY` | Required | RetroAchievements Web API key. |
+| `RA_USERNAME` | Required | RetroAchievements username. |
+| `PHPSESSID` | Required | Backloggery session cookie. |
+| `log_token` | Required | Backloggery session token cookie. |
+| `BACKLOGGERY_USERNAME` | Required | Backloggery account to update. |
+| `STEAM_WEB_API` | Empty | Steam Web API key. Set this and `STEAM_ID` to enable Steam. |
+| `STEAM_ID` | Empty | SteamID64 or profile URL. Set this and `STEAM_WEB_API` to enable Steam. |
+| `WATCHDOG_DRY_RUN` | `true` | When true, the connector reads data and reports planned changes without writing to Backloggery. |
+| `WATCHDOG_STEALTH_SAVE` | `false` | Turns on Backloggery Stealth Save behavior. |
+| `WATCHDOG_DATABASE_PATH` | `/data/watchdog.db` | SQLite database location. Keep it under `/data` so the Docker mount preserves it. |
+| `WATCHDOG_OFFLINE_POLL_SECONDS` | `900` | How often to check RA while offline. |
+| `WATCHDOG_ONLINE_POLL_SECONDS` | `60` | How often to check RA while online. |
+| `WATCHDOG_OFFLINE_STABLE_POLLS` | `3` | Stable offline checks before ending an RA active watch. |
+| `WATCHDOG_PRIORITY_DECAY_DAYS` | `14` | Days between Steam or RA Priority changes. |
+| `WATCHDOG_STEAM_SCAN_SECONDS` | `900` | How often to scan the Steam library and linked entries. |
+| `WATCHDOG_STEAM_PRESENCE_SECONDS` | `60` | How often to check Steam's active game. |
+| `WATCHDOG_STEAM_AUTO_SUBMIT_ACTIVE` | `false` | Adds an eligible active Steam game automatically. Requires Steam settings and `WATCHDOG_DRY_RUN=false`. |
+| `WATCHDOG_LOG_LEVEL` | `INFO` | Log verbosity. |
+| `WATCHDOG_LOG_FORMAT` | `plain` | Use `plain` or `json` logs. |
 
 ## Commands
 
