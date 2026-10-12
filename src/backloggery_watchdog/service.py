@@ -233,7 +233,7 @@ class WatchdogService:
                 continue
             if bool(record["online"]):
                 desired = PRIORITY_NOW_PLAYING
-                reason = "RA reports Online or its Offline confirmation window is still open"
+                reason = "RA reports Online, new game activity was observed, or its Offline confirmation window is still open"
             else:
                 offline_since = record["offline_since"]
                 if not offline_since:

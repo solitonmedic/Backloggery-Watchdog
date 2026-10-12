@@ -261,11 +261,17 @@ class StateStore:
             "SELECT fingerprint, active, stable_polls FROM observations WHERE ra_game_id=?",
             (ra_game_id,),
         ).fetchone()
+        activity_changed = bool(prior and prior["fingerprint"] != fingerprint)
         if online:
             active, stable = True, 0
         elif prior and bool(prior["active"]):
-            stable = int(prior["stable_polls"]) + 1 if prior["fingerprint"] == fingerprint else 0
+            stable = 0 if activity_changed else int(prior["stable_polls"]) + 1
             active = stable < stable_limit
+        elif activity_changed:
+            # RA can update Last Played, Rich Presence, or progress while its
+            # account summary still reports Offline. Treat that change as a
+            # fresh activity signal and use the normal offline confirmation.
+            active, stable = True, 0
         else:
             active, stable = False, 0
         self.db.execute(

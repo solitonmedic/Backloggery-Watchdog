@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     user: "1001:1001"
     env_file:
-      - .env
+      - ../.env
     environment:
       WATCHDOG_DRY_RUN: "${WATCHDOG_DRY_RUN:-true}"
       WATCHDOG_STEALTH_SAVE: "${WATCHDOG_STEALTH_SAVE:-false}"
@@ -24,7 +24,7 @@ services:
       STEAM_WEB_API: "${STEAM_WEB_API:-}"
       STEAM_ID: "${STEAM_ID:-}"
     volumes:
-      - ./data:/data
+      - ../data:/data
     healthcheck:
       test: ["CMD", "backloggery-watchdog", "healthcheck"]
       interval: 60s
