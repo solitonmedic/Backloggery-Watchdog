@@ -29,6 +29,9 @@ class FakeSteam:
     def recently_played(self):
         return [{"appid": 42, "playtime_2weeks": self.recent} ] if self.recent else []
 
+    def public_game(self, _app_id):
+        return None
+
     def player_achievements(self, _app_id):
         return [
             {"name": "Latest Achievement", "achieved": 1, "unlocktime": 100},

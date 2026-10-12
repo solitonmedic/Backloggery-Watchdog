@@ -35,10 +35,10 @@ class FakeBackloggery:
         return 765
 
     def game(self, entry_id):
-        return next(
-            (row for row in self.library_rows if row.get("game_inst_id") == entry_id),
-            {"game_inst_id": entry_id, **self.added_games[-1]},
-        )
+        for row in self.library_rows:
+            if row.get("game_inst_id") == entry_id:
+                return row
+        return {"game_inst_id": entry_id, **self.added_games[-1]}
 
 
 def _candidate_store(tmp_path):
